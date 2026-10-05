@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import { ChevronLeft, ChevronRight, CircleAlert, Landmark, PiggyBank, Plus, Receipt, RefreshCw } from 'lucide-react';
 import type { LocalDate, Transaction } from '../../shared/types.ts';
 import { buildSegments, tally } from '../../shared/accrual.ts';
+import type { SetAsideKind } from '../../shared/plan.ts';
 import { toLocalDate } from '../../shared/dates.ts';
 import { useBillMap, useCategories, useCategoryMap, useCoverage, useEngineData, useNow, useSetAsidePlan, useSettings, useSpendCheck, useTransactions } from '../lib/hooks.ts';
 import { bucketIndexAt, bucketsFor, periodBounds, periodTitle, shiftAnchor } from '../lib/periods.ts';
@@ -12,11 +13,17 @@ import { notCountedReason, spentByDay } from '../lib/money.ts';
 import { bankApi, useBank } from '../lib/bank.ts';
 import { go, openSheet, toast } from '../lib/ui.ts';
 import { BarChart, type BarDatum } from '../components/BarChart.tsx';
-import { NetChart, type NetDatum } from '../components/NetChart.tsx';
+import { BUDGET_COLORS, NetChart, type BudgetDay } from '../components/NetChart.tsx';
 import { Card, Chip, EmptyState, Segmented, SectionTitle } from '../components/ui.tsx';
 
 type SpendRange = 'week' | 'month';
 type ChartMode = 'left' | 'spent';
+
+const SET_ASIDE_NAMES: Array<[SetAsideKind, string]> = [
+  ['bills', 'Bills'],
+  ['savings', 'Savings'],
+  ['goals', 'Wish list'],
+];
 
 function TxRow({ tx }: { tx: Transaction }) {
   const cats = useCategoryMap();
@@ -117,7 +124,11 @@ export function Spending() {
   const select = (i: number) => setPicked({ key: windowKey, i: sel === i ? null : i });
 
   const counted = (tx: Transaction) => counts(tx) && (!catFilter || tx.categoryId === catFilter);
-  const spentDays = useMemo(() => spentByDay(txs, from, to, (tx) => counts(tx) && (!catFilter || tx.categoryId === catFilter)), [txs, from, to, counts, catFilter]);
+  // "Left" is about all your money, so the category filter only narrows the Spent view.
+  const spentDays = useMemo(
+    () => spentByDay(txs, from, to, (tx) => counts(tx) && (mode === 'left' || !catFilter || tx.categoryId === catFilter)),
+    [txs, from, to, counts, catFilter, mode],
+  );
   const segs = useMemo(() => buildSegments(data, from, to, now), [data, from, to, now]);
   const earnedDays = useMemo(() => buckets.map((b) => tally(segs, b.start, b.end, now)), [buckets, segs, now]);
 
@@ -140,21 +151,24 @@ export function Spending() {
       title: b.title,
       current: i === nowIndex,
       parts: [
-        { id: 'spent', name: 'Spent', color: 'var(--s8)', value: Math.max(0, spentDays.get(b.date!) ?? 0) },
-        { id: 'bills', name: 'Set aside', color: 'var(--s7)', value: future ? 0 : bill, projected: future ? bill : 0 },
+        { id: 'spent', name: 'Spent', color: BUDGET_COLORS.spent, value: Math.max(0, spentDays.get(b.date!) ?? 0) },
+        { id: 'bills', name: 'Set aside', color: BUDGET_COLORS.setAside, value: future ? 0 : bill, projected: future ? bill : 0 },
       ],
     };
   });
-  const netChart: NetDatum[] = buckets.map((b, i) => {
-    const e = earnedDays[i];
-    const future = b.date! > today;
+  const leftChart: BudgetDay[] = buckets.map((b, i) => {
+    const d = b.date!;
+    const future = d > today;
     return {
       key: b.key,
       label: b.label,
       title: b.title,
       current: i === nowIndex,
       projected: future,
-      value: e.value + (future ? e.projected : 0) - (spentDays.get(b.date!) ?? 0) - (plan.byDay.get(b.date!) ?? 0),
+      earned: earnedDays[i].value + (future ? earnedDays[i].projected : 0),
+      setAside: plan.byDay.get(d) ?? 0,
+      setAsideParts: SET_ASIDE_NAMES.map(([k, name]) => ({ name, value: plan.byKind[k].get(d) ?? 0 })).filter((p) => p.value > 0.005),
+      spent: spentDays.get(d) ?? 0,
     };
   });
 
@@ -171,9 +185,19 @@ export function Spending() {
     .sort((a, b) => b.date.localeCompare(a.date) || (b.at ?? 0) - (a.at ?? 0));
   const groups = new Map<LocalDate, Transaction[]>();
   for (const tx of listed) groups.set(tx.date, [...(groups.get(tx.date) ?? []), tx]);
-  const selBills = selDate ? (plan.byDay.get(selDate) ?? 0) : 0;
-  const selEarned = sel != null ? earnedDays[sel].value : 0;
-  const selSpent = selDate ? (spentDays.get(selDate) ?? 0) : 0;
+  const selDay = sel != null ? leftChart[sel] : undefined;
+  const selLeft = selDay ? selDay.earned - selDay.setAside - selDay.spent : 0;
+  const legend: Array<[string, string]> =
+    mode === 'left'
+      ? [
+          ['Set aside', BUDGET_COLORS.setAside],
+          ['Spent', BUDGET_COLORS.spent],
+          ['Left', BUDGET_COLORS.left],
+        ]
+      : [
+          ['Spent', BUDGET_COLORS.spent],
+          ['Set aside', BUDGET_COLORS.setAside],
+        ];
 
   return (
     <div>
@@ -240,41 +264,44 @@ export function Spending() {
             <p className="num mt-2.5 text-[14px] text-ink-2">
               Earned {money(earned)} · spent {money(spent)} · set aside {money(mode === 'left' ? billsSoFar : billsTotal)}
             </p>
-            {mode === 'spent' && (
-              <div className="mt-3 flex gap-4 text-[13px] text-ink-2">
-                <span className="flex items-center gap-2">
-                  <span className="size-2.5 rounded-[3px] bg-[var(--s8)]" /> Spent
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-ink-2">
+              {legend.map(([name, color]) => (
+                <span key={name} className="flex items-center gap-2">
+                  <span className="size-2.5 rounded-[3px]" style={{ background: color }} /> {name}
                 </span>
-                <span className="flex items-center gap-2">
-                  <span className="size-2.5 rounded-[3px] bg-[var(--s7)]" /> Set aside
-                </span>
-              </div>
-            )}
+              ))}
+              {mode === 'left' && <span className="text-ink-3">Full bar = day's pay</span>}
+            </div>
             <div className="mt-6">
               {mode === 'left' ? (
-                <NetChart ariaLabel="Money left each day" data={netChart} selected={sel} onSelect={select} format={signed} labelEvery={range === 'month' ? 5 : 1} />
+                <NetChart ariaLabel="Each day's pay, split into set aside, spent, and left" data={leftChart} selected={sel} onSelect={select} labelEvery={range === 'month' ? 5 : 1} />
               ) : (
                 <BarChart ariaLabel="Spending and bills by day" data={spentChart} selected={sel} onSelect={select} format={money} labelEvery={range === 'month' ? 5 : 1} />
               )}
             </div>
-            {selDate && (
-              <div className="num mt-5 grid grid-cols-4 gap-2 border-t border-line pt-4 text-center text-[13px]">
-                <div>
-                  <p className="text-ink-2">Earned</p>
-                  <p className="font-semibold">{money(selEarned)}</p>
+            {selDay && (
+              <div className="mt-5 border-t border-line pt-4">
+                <div className="num grid grid-cols-4 gap-2 text-center text-[13px]">
+                  <div>
+                    <p className="text-ink-2">{selDay.projected ? 'Scheduled' : 'Earned'}</p>
+                    <p className="font-semibold">{money(selDay.earned)}</p>
+                  </div>
+                  <div>
+                    <p className="text-ink-2">Set aside</p>
+                    <p className="font-semibold">{money(selDay.setAside)}</p>
+                  </div>
+                  <div>
+                    <p className="text-ink-2">Spent</p>
+                    <p className="font-semibold">{money(selDay.spent)}</p>
+                  </div>
+                  <div>
+                    <p className="text-ink-2">Left</p>
+                    <p className={clsx('font-semibold', selLeft >= 0 ? 'text-money' : 'text-spend')}>{signed(selLeft)}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-ink-2">Spent</p>
-                  <p className="font-semibold">{money(selSpent)}</p>
-                </div>
-                <div>
-                  <p className="text-ink-2">Set aside</p>
-                  <p className="font-semibold">{money(selBills)}</p>
-                </div>
-                <div>
-                  <p className="text-ink-2">Left</p>
-                  <p className={clsx('font-semibold', selEarned - selSpent - selBills >= 0 ? 'text-money' : 'text-spend')}>{signed(selEarned - selSpent - selBills)}</p>
-                </div>
+                {!!selDay.setAsideParts?.length && (
+                  <p className="num mt-3 text-center text-[12px] text-ink-3">{selDay.setAsideParts.map((p) => `${p.name} ${money(p.value)}`).join(' · ')}</p>
+                )}
               </div>
             )}
           </Card>

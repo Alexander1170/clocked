@@ -95,3 +95,25 @@ export function rateSummary(job: Pick<ScheduledJob, 'schedule' | 'takeHome' | 'f
   }[job.frequency];
   return { weeklyHours, rate, formula };
 }
+
+/**
+ * A day's pay as one stacked bar: set-asides come off the top, then spending,
+ * and what's left sits on the $0 line. Whatever the pay doesn't cover carries
+ * on below $0.
+ */
+export function splitDay(d: { earned: number; setAside: number; spent: number }) {
+  const spent = Math.max(0, d.spent);
+  // A refund adds back to the day, like extra pay.
+  const pay = Math.max(0, d.earned) + Math.max(0, -d.spent);
+  const asideCovered = Math.min(d.setAside, pay);
+  const spentCovered = Math.min(spent, pay - asideCovered);
+  return {
+    pay,
+    asideCovered,
+    spentCovered,
+    left: pay - asideCovered - spentCovered,
+    asideOver: d.setAside - asideCovered,
+    spentOver: spent - spentCovered,
+    net: d.earned - d.setAside - d.spent,
+  };
+}

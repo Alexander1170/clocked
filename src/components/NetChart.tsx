@@ -1,17 +1,26 @@
 import { useState, type KeyboardEvent } from 'react';
 import clsx from 'clsx';
-import { moneyAxis } from '../lib/format.ts';
+import { minus, money, moneyAxis, signed } from '../lib/format.ts';
+import { splitDay } from '../lib/money.ts';
 
-export interface NetDatum {
+export interface BudgetDay {
   key: string;
   label: string;
   title: string;
-  /** Earned minus spent minus bills. */
-  value: number;
-  /** A future day: earnings are only scheduled, so the bar is faded. */
+  /** Pay for the day: earned so far, or what's scheduled on a future day. */
+  earned: number;
+  setAside: number;
+  /** What the set-aside is for (bills, savings, wish list). */
+  setAsideParts?: Array<{ name: string; value: number }>;
+  /** Net spending: refunds make it negative. */
+  spent: number;
+  /** A future day: pay is only scheduled, so the bar is faded. */
   projected?: boolean;
   current?: boolean;
 }
+
+/** Validated together, light and dark, so any two stay apart with color blindness. */
+export const BUDGET_COLORS = { left: 'var(--c-left)', spent: 'var(--s8)', setAside: 'var(--s7)' } as const;
 
 function niceMax(v: number): number {
   if (v <= 0) return 0;
@@ -20,33 +29,75 @@ function niceMax(v: number): number {
   return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * exp;
 }
 
+const GAP = 2;
+
+interface Seg {
+  key: string;
+  color: string;
+  h: number;
+}
+
+const segments = (list: Array<[string, string, number]>, px: (v: number) => number): Seg[] =>
+  list.filter(([, , v]) => v > 0.005).map(([key, color, v]) => ({ key, color, h: Math.max(2, px(v)) }));
+const stackHeight = (s: Seg[]) => s.reduce((t, x) => t + x.h, 0) + Math.max(0, s.length - 1) * GAP;
+
+function Swatch({ color }: { color?: string }) {
+  return <span className="size-2 rounded-[2px]" style={{ background: color ?? 'transparent' }} />;
+}
+
 /**
- * What's left each day, as bars above (came out ahead) or below (overspent) a
- * zero line. Direction carries the sign, so color isn't the only cue.
+ * Each day's pay, stacked into what's set aside, what's spent, and what's
+ * left, around a $0 line. Tap or arrow keys select a day; hover shows the
+ * numbers.
  */
 export function NetChart({
   data,
   selected,
   onSelect,
-  format,
-  height = 168,
+  height = 180,
   labelEvery = 1,
   ariaLabel,
 }: {
-  data: NetDatum[];
+  data: BudgetDay[];
   selected: number | null;
   onSelect(i: number): void;
-  format(v: number): string;
   height?: number;
   labelEvery?: number;
   ariaLabel: string;
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  const top = niceMax(Math.max(0, ...data.map((d) => d.value)));
-  const bottom = niceMax(Math.max(0, ...data.map((d) => -d.value)));
-  const span = top + bottom || 1;
-  const zero = (top / span) * height; // distance from the top
-  const px = (v: number) => (Math.abs(v) / span) * height;
+  const parts = data.map(splitDay);
+  const top = niceMax(Math.max(0, ...parts.map((p) => p.pay)));
+  const bottom = niceMax(Math.max(0, ...parts.map((p) => p.asideOver + p.spentOver)));
+  const span = top + bottom;
+  const zero = span ? (top / span) * height : height; // distance of $0 from the top
+  const px = (v: number) => (span ? (v / span) * height : 0);
+
+  const bars = parts.map((p) => {
+    // Above $0, bottom to top. Below $0 the same stack carries on downward.
+    const up = segments(
+      [
+        ['left', BUDGET_COLORS.left, p.left],
+        ['spent', BUDGET_COLORS.spent, p.spentCovered],
+        ['aside', BUDGET_COLORS.setAside, p.asideCovered],
+      ],
+      px,
+    );
+    const down = segments(
+      [
+        ['aside', BUDGET_COLORS.setAside, p.asideOver],
+        ['spent', BUDGET_COLORS.spent, p.spentOver],
+      ],
+      px,
+    );
+    return { ...p, up, down, peak: zero - stackHeight(up) };
+  });
+
+  const ticks = [
+    ...(top ? [{ v: top, y: 0 }] : []),
+    ...(top && zero >= 96 ? [{ v: top / 2, y: zero / 2 }] : []),
+    ...(bottom ? [{ v: -bottom, y: height }] : []),
+  ];
 
   const onKey = (e: KeyboardEvent, i: number) => {
     const next = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : null;
@@ -56,30 +107,28 @@ export function NetChart({
     (e.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
   };
 
-  const ticks = [
-    ...(top ? [{ v: top, y: 0 }] : []),
-    ...(bottom ? [{ v: -bottom, y: height }] : []),
-  ];
+  const tip = hover != null && data[hover] ? { d: data[hover], b: bars[hover], i: hover } : null;
 
   return (
     <div className="relative select-none" role="group" aria-label={ariaLabel}>
       <div className="relative" style={{ height }}>
         {ticks.map((t) => (
           <div key={t.v} className="pointer-events-none absolute right-0 left-0 border-t border-grid" style={{ top: t.y }}>
-            <span className="num absolute -top-2.5 right-0 bg-card pl-1.5 text-[11px] text-ink-3">
-              {t.v < 0 ? '−' : ''}
-              {moneyAxis(Math.abs(t.v))}
-            </span>
+            {Math.abs(t.y - zero) >= 16 && (
+              <span className="num absolute -top-2.5 right-0 bg-card pl-1.5 text-[11px] text-ink-3">
+                {t.v < 0 ? '−' : ''}
+                {moneyAxis(Math.abs(t.v))}
+              </span>
+            )}
           </div>
         ))}
-        <div className="pointer-events-none absolute right-0 left-0 border-t border-ink-3/50" style={{ top: zero }}>
+        <div className="pointer-events-none absolute right-0 left-0 border-t border-ink-3/40" style={{ top: zero }}>
           <span className="num absolute -top-2.5 right-0 bg-card pl-1.5 text-[11px] text-ink-3">$0</span>
         </div>
         <div className="absolute inset-0 right-9 flex">
           {data.map((d, i) => {
+            const b = bars[i];
             const on = selected === i;
-            const h = Math.max(d.value === 0 ? 0 : 2, px(d.value));
-            const up = d.value >= 0;
             return (
               <button
                 key={d.key}
@@ -89,29 +138,41 @@ export function NetChart({
                 onPointerLeave={() => setHover(null)}
                 onFocus={() => setHover(i)}
                 onBlur={() => setHover(null)}
-                aria-label={`${d.title}: ${format(d.value)} left${d.projected ? ', projected' : ''}`}
+                aria-label={`${d.title}: ${d.projected ? 'scheduled' : 'earned'} ${money(d.earned)}, set aside ${money(d.setAside)}, spent ${money(d.spent)}, ${signed(b.net)} left`}
                 aria-pressed={on}
                 className="group relative h-full min-w-0 flex-1 outline-none"
               >
                 <span
                   className={clsx(
-                    'absolute left-1/2 block w-[64%] max-w-6 -translate-x-1/2 transition-[height,opacity] duration-300',
-                    up ? 'rounded-t-[4px]' : 'rounded-b-[4px]',
-                    selected != null && !on && 'opacity-55 group-hover:opacity-90',
+                    'absolute inset-0 transition-opacity',
+                    d.projected ? (on ? 'opacity-75' : 'opacity-40 group-hover:opacity-60') : selected != null && !on && 'opacity-55 group-hover:opacity-90',
                   )}
-                  style={{
-                    height: h,
-                    top: up ? zero - h : zero,
-                    background: up ? 'var(--c-money)' : 'var(--c-spend)',
-                    opacity: d.projected ? 0.32 : undefined,
-                  }}
-                />
+                >
+                  <span className="absolute left-1/2 flex w-[64%] max-w-6 -translate-x-1/2 flex-col-reverse gap-[2px]" style={{ bottom: height - zero }}>
+                    {b.up.map((s, k) => (
+                      <span
+                        key={s.key}
+                        className={clsx('block w-full transition-[height] duration-300', k === b.up.length - 1 && 'rounded-t-[4px]')}
+                        style={{ height: s.h, background: s.color }}
+                      />
+                    ))}
+                  </span>
+                  <span className="absolute left-1/2 flex w-[64%] max-w-6 -translate-x-1/2 flex-col gap-[2px]" style={{ top: zero }}>
+                    {b.down.map((s, k) => (
+                      <span
+                        key={s.key}
+                        className={clsx('block w-full transition-[height] duration-300', k === b.down.length - 1 && 'rounded-b-[4px]')}
+                        style={{ height: s.h, background: s.color }}
+                      />
+                    ))}
+                  </span>
+                  {!b.up.length && !b.down.length && (
+                    <span className="absolute left-1/2 h-[2px] w-[64%] max-w-6 -translate-x-1/2 rounded-full bg-grid" style={{ top: zero - 1 }} />
+                  )}
+                </span>
                 {on && (
-                  <span
-                    className="num absolute left-1/2 z-10 -translate-x-1/2 text-[12px] font-semibold whitespace-nowrap"
-                    style={up ? { top: Math.max(0, zero - h - 20) } : { top: Math.min(height - 16, zero + h + 4) }}
-                  >
-                    {format(d.value)}
+                  <span className="num absolute left-1/2 z-10 -translate-x-1/2 text-[12px] font-semibold whitespace-nowrap text-ink" style={{ top: b.peak - 18 }}>
+                    {signed(b.net)}
                   </span>
                 )}
               </button>
@@ -132,18 +193,37 @@ export function NetChart({
           </span>
         ))}
       </div>
-      {hover != null && data[hover] && (
+      {tip && (
         <div
-          className="pointer-events-none absolute z-20 w-max max-w-56 rounded-2xl border border-line bg-card px-3 py-2.5 shadow-[0_8px_24px_rgba(0,0,0,0.16)]"
+          className="pointer-events-none absolute z-20 w-max max-w-72 rounded-2xl border border-line bg-card px-3 py-2.5 shadow-[0_8px_24px_rgba(0,0,0,0.16)]"
           style={{
-            top: -8,
-            left: `${((hover + 0.5) / data.length) * 100}%`,
-            transform: `translate(${hover < 2 ? '-20%' : hover > data.length - 3 ? '-85%' : '-50%'}, -100%)`,
+            top: tip.b.peak - 8,
+            left: `calc(${((tip.i + 0.5) / data.length) * 100}% - ${((tip.i + 0.5) / data.length) * 36}px)`,
+            transform: `translate(${tip.i < 2 ? '-20%' : tip.i > data.length - 3 ? '-85%' : '-50%'}, -100%)`,
           }}
         >
-          <p className="text-[12px] text-ink-2">{data[hover].title}</p>
-          <p className="num text-[15px] font-semibold">{format(data[hover].value)} left</p>
-          {data[hover].projected && <p className="mt-0.5 text-[12px] text-ink-3">If you work as scheduled</p>}
+          <p className="text-[12px] text-ink-2">{tip.d.title}</p>
+          <div className="num mt-1.5 grid grid-cols-[auto_1fr_auto] items-center gap-x-2 gap-y-1 text-[12px]">
+            <Swatch />
+            <span className="text-ink-2">{tip.d.projected ? 'Scheduled' : 'Earned'}</span>
+            <span className="text-right font-semibold">{money(tip.d.earned)}</span>
+            <Swatch color={BUDGET_COLORS.setAside} />
+            <span className="text-ink-2">Set aside</span>
+            <span className="text-right font-semibold">{tip.d.setAside > 0.005 ? minus(tip.d.setAside) : money(0)}</span>
+            {(tip.d.setAsideParts?.length ?? 0) > 0 && (
+              <span className="col-span-2 col-start-2 -mt-0.5 text-[11px] text-ink-3">
+                {tip.d.setAsideParts!.map((p) => `${p.name} ${money(p.value)}`).join(' · ')}
+              </span>
+            )}
+            <Swatch color={BUDGET_COLORS.spent} />
+            <span className="text-ink-2">Spent</span>
+            <span className="text-right font-semibold">{tip.d.spent < -0.005 ? signed(-tip.d.spent) : tip.d.spent > 0.005 ? minus(tip.d.spent) : money(0)}</span>
+            <span className="col-span-3 my-0.5 border-t border-line" />
+            <Swatch color={BUDGET_COLORS.left} />
+            <span className="font-medium">Left</span>
+            <span className="text-right text-[13px] font-semibold">{signed(tip.b.net)}</span>
+          </div>
+          {tip.d.projected && <p className="mt-1.5 text-[12px] text-ink-3">If you work as scheduled</p>}
         </div>
       )}
     </div>

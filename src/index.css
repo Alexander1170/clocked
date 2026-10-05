@@ -27,6 +27,8 @@
   --c-ink-3: #6e727a;
   --c-grid: #e6e7ea;
   --c-money: #067a3f;
+  /* "Left" bar segment: validated against --s7 and --s8 for color blindness. */
+  --c-left: #0d9488;
   --c-spend: #c8312f;
   --c-hover: rgba(11, 11, 12, 0.04);
   --c-inverse: #ffffff;
@@ -53,6 +55,7 @@
     --c-ink-3: #7c818b;
     --c-grid: #25272c;
     --c-money: #3dd68c;
+    --c-left: #1aa39a;
     --c-spend: #ff6b6b;
     --c-hover: rgba(255, 255, 255, 0.05);
     --c-inverse: #0a0b0d;
@@ -78,6 +81,7 @@
   --c-ink-3: #7c818b;
   --c-grid: #25272c;
   --c-money: #3dd68c;
+  --c-left: #1aa39a;
   --c-spend: #ff6b6b;
   --c-hover: rgba(255, 255, 255, 0.05);
   --c-inverse: #0a0b0d;
