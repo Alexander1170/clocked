@@ -1,5 +1,6 @@
 // Turns Plaid transactions into Clocked transactions: category, money flow, bill links.
-import type { Bill, Rule, Transaction, TxFlow } from '../shared/types.ts';
+import type { Bill, LocalDate, Rule, Transaction, TxFlow } from '../shared/types.ts';
+import { diffDays } from '../shared/dates.ts';
 import type { PlaidTransaction } from './plaid.ts';
 
 // Money moving between your own accounts, or paying down a card whose purchases are already counted.
@@ -89,6 +90,41 @@ export function matchBill(merchant: string, bills: Bill[]): string | undefined {
   return bills.find((b) => !b.deleted && b.match && m.includes(b.match.trim().toLowerCase()))?.id;
 }
 
+const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+/** "Chipotle" and "Chipotle Mexican Grill", or "Speedway" and "SPEEDWAY 04512". */
+function sameName(a: string, b: string): boolean {
+  const x = words(a);
+  const y = words(b);
+  return !!x && !!y && (x.includes(y) || y.includes(x) || x.split(' ')[0] === y.split(' ')[0]);
+}
+
+/**
+ * A purchase you added by hand that this bank transaction is the same as, so
+ * it isn't counted twice: the same amount within three days, under a similar
+ * name. A different name still matches on the same or next day when the
+ * amount has cents, since a round amount like $40 is too likely to be a
+ * different purchase. The closest day wins.
+ */
+export function findManualMatch(t: { amount: number; date: LocalDate; merchant: string }, candidates: readonly Transaction[]): Transaction | undefined {
+  const cents = Math.round(t.amount * 100);
+  let best: Transaction | undefined;
+  let bestScore = Infinity;
+  for (const c of candidates) {
+    if (c.deleted || c.source === 'plaid' || Math.round(c.amount * 100) !== cents) continue;
+    const gap = Math.abs(diffDays(c.date, t.date));
+    if (gap > 3) continue;
+    const named = sameName(c.merchant, t.merchant);
+    if (!named && !(gap <= 1 && cents % 100 !== 0)) continue;
+    const score = gap * 10 + (named ? 0 : 5);
+    if (score < bestScore) {
+      best = c;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 export interface MapContext {
   /** The record already stored for this transaction. */
   existing?: Transaction;
@@ -136,6 +172,9 @@ export function mapPlaidTransaction(t: PlaidTransaction, ctx: MapContext): Trans
     rec.excluded = prev.excluded;
     rec.flow = prev.flow;
     rec.billId = prev.billId;
+    rec.goalId = prev.goalId;
+    // The bank often has no time of day; keep the one you entered.
+    rec.at = rec.at ?? prev.at;
   } else {
     rec.flow = flowFor(amount, pfc?.primary, pfc?.detailed);
     rec.categoryId = ruleCategory(merchant, ctx.rules) ?? categoryFor(pfc?.primary, pfc?.detailed);

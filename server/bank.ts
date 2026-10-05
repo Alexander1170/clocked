@@ -3,7 +3,7 @@
 import { Hono } from 'hono';
 import type { Store } from './db.ts';
 import { plaidClient, PlaidError, type PlaidAccount, type PlaidClient, type PlaidEnv, type PlaidTransaction } from './plaid.ts';
-import { mapPlaidTransaction } from './categorize.ts';
+import { cleanName, findManualMatch, mapPlaidTransaction } from './categorize.ts';
 import type { Change } from '../shared/types.ts';
 
 const DAYS_REQUESTED = 180;
@@ -233,12 +233,28 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
       const categoryGone = (id: string) => !!store.get('categories', id)?.deleted;
       const now = Date.now();
       const changes: Change[] = [];
+      // Purchases you added by hand that the bank hasn't sent yet. Each can stand in for one bank transaction.
+      const handEntered = store.all('transactions').filter((x) => x.source !== 'plaid');
+      const matched = new Set<string>();
       for (const t of [...added, ...modified]) {
         const existing = store.get('transactions', `plaid_${t.transaction_id}`);
-        const carryFrom = !existing && t.pending_transaction_id ? store.get('transactions', `plaid_${t.pending_transaction_id}`) : undefined;
+        let carryFrom = !existing && t.pending_transaction_id ? store.get('transactions', `plaid_${t.pending_transaction_id}`) : undefined;
+        // The bank's copy of something you already added takes its place, keeping your category and note.
+        const replaces =
+          !existing && !carryFrom
+            ? findManualMatch(
+                { amount: t.amount, date: t.authorized_date || t.date, merchant: (t.merchant_name || cleanName(t.name) || t.name).trim() },
+                handEntered.filter((x) => !matched.has(x.id)),
+              )
+            : undefined;
+        if (replaces) {
+          matched.add(replaces.id);
+          carryFrom = { ...replaces, edited: true };
+        }
         const acct = byAccount.get(t.account_id);
         const rec = mapPlaidTransaction(t, { existing, carryFrom, rules, bills, categoryGone, account: acct && { name: accountLabel(acct), included: acct.included }, now });
         changes.push({ c: 'transactions', rec });
+        if (replaces) changes.push({ c: 'transactions', rec: { ...replaces, deleted: true, updatedAt: Math.max(now, replaces.updatedAt + 1) } });
       }
       for (const r of removed) {
         const existing = store.get('transactions', `plaid_${r.transaction_id}`);

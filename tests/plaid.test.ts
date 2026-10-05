@@ -228,6 +228,28 @@ describe('bank sync against a fake Plaid', () => {
     expect(get('t7')!.categoryId).toBe('cat_other');
   });
 
+  it('lets the bank copy of something you added by hand take its place', async () => {
+    const at = Date.parse('2026-10-03T12:15:00');
+    store.apply([
+      change('transactions', { id: 'hand1', updatedAt: 1, source: 'manual', date: '2026-10-03', at, amount: 23.17, merchant: 'Chipotle', categoryId: 'cat_fun', note: 'team lunch' }),
+      change('transactions', { id: 'hand2', updatedAt: 1, source: 'manual', date: '2026-10-04', amount: 40, merchant: 'Cash for a friend', categoryId: 'cat_other' }),
+    ]);
+    fake.pages[5] = {
+      added: [
+        tx('t9', { amount: 23.17, merchant_name: 'Chipotle Mexican Grill', authorized_date: '2026-10-04' }),
+        // Same round amount, different place: too likely to be a different purchase.
+        tx('t10', { amount: 40, merchant_name: 'Kroger', authorized_date: '2026-10-04', personal_finance_category: { primary: 'FOOD_AND_DRINK', detailed: 'FOOD_AND_DRINK_GROCERIES' } }),
+      ],
+      modified: [],
+      removed: [],
+    };
+    await bank.syncItem('item_1');
+    expect(get('t9')).toMatchObject({ categoryId: 'cat_fun', note: 'team lunch', edited: true, at });
+    expect(store.get('transactions', 'hand1')?.deleted).toBe(true);
+    expect(get('t10')!.categoryId).toBe('cat_groceries');
+    expect(store.get('transactions', 'hand2')?.deleted).toBeFalsy();
+  });
+
   it('turns an account on and off', () => {
     bank.setAccountIncluded('item_1', 'acc_loan', true);
     expect(get('t4')!.accountOff).toBeUndefined();
