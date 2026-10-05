@@ -163,6 +163,9 @@ export function Today() {
   const bills = plan.byDay.get(today) ?? 0;
   const left = t.value - spent - bills;
   const perMin = ratePerMinute(segs, now);
+  const scheduledToday = segs.filter((s) => s.kind !== 'gig' && s.end > dayStart(today) && s.start < dayEnd(today));
+  const nextStart = scheduledToday.filter((s) => s.start > now).sort((a, b) => a.start - b.start)[0]?.start ?? null;
+  const workedEarlier = scheduledToday.some((s) => s.end <= now);
   const feed = useMemo(
     () => buildDayFeed({ date: today, segs, gigs: data.gigs, txs, jobs: jobMap, cats, bills: billMap, now }),
     [today, segs, data.gigs, txs, jobMap, cats, billMap, now],
@@ -185,6 +188,10 @@ export function Today() {
         <span className="live-dot" /> Dashing for {stopwatch(now - dash.start)}
       </>
     );
+  } else if (nextStart != null && workedEarlier) {
+    statusLine = `Unpaid break · pay picks back up at ${clockShort(nextStart)}`;
+  } else if (nextStart != null) {
+    statusLine = `Pay starts building at ${clockShort(nextStart)}`;
   } else if (t.projected > 0) {
     statusLine = `${money(t.projected)} more scheduled today`;
   } else if (t.value > 0) {
