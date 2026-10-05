@@ -95,7 +95,11 @@ export function plaidClient(env: PlaidEnv, clientId: string, secret: string, bas
         user: { client_user_id: 'clocked-owner' },
       };
       // Update mode (fixing a login) passes the access token instead of products.
-      if (accessToken) body.access_token = accessToken;
+      // Update mode (fixing a login, or changing which accounts are shared) reuses the same Item.
+      if (accessToken) {
+        body.access_token = accessToken;
+        body.update = { account_selection_enabled: true };
+      }
       else {
         body.products = ['transactions'];
         body.transactions = { days_requested: daysRequested };

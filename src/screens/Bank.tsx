@@ -110,12 +110,13 @@ function ItemCard({ item }: { item: ItemStatus }) {
     }
   };
 
-  const reconnect = () =>
-    run('reconnect', async () => {
+  // Update mode: sign in again or change which accounts the bank shares. Uses the same connection, not a new one.
+  const reconnect = (label: string) =>
+    run(label, async () => {
       const { linkToken } = await bankApi.linkToken(item.env, item.itemId);
       if (await openPlaidLink(linkToken)) {
         set(await bankApi.reconnected(item.itemId));
-        toast({ title: `${item.institution} reconnected` });
+        toast({ title: `${item.institution} updated`, detail: 'Checking for transactions now.' });
       }
     });
 
@@ -155,7 +156,7 @@ function ItemCard({ item }: { item: ItemStatus }) {
             <p className="text-[13px] text-ink-2">{item.error}</p>
           </div>
           {item.status === 'login_required' && (
-            <button className="btn btn-sm btn-primary" disabled={!!busy} onClick={reconnect}>
+            <button className="btn btn-sm btn-primary" disabled={!!busy} onClick={() => reconnect('reconnect')}>
               Reconnect
             </button>
           )}
@@ -185,6 +186,12 @@ function ItemCard({ item }: { item: ItemStatus }) {
       </div>
 
       <div className="mt-3 flex items-center justify-between gap-3 border-t border-line pt-4">
+        <p className="text-[13px] text-ink-2">Change which accounts {item.institution} shares. Doesn’t use a new connection.</p>
+        <button className="btn btn-sm btn-secondary" disabled={!!busy} onClick={() => reconnect('accounts')}>
+          Choose accounts
+        </button>
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-3">
         <p className="text-[13px] text-ink-2">{live ? 'Removing doesn’t give back a free connection.' : 'Removes the test transactions too.'}</p>
         <button
           className="btn btn-sm btn-danger"
