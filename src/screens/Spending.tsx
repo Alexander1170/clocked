@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { ChevronLeft, ChevronRight, CircleAlert, Landmark, PiggyBank, Plus, Receipt, RefreshCw } from 'lucide-react';
 import type { LocalDate, Transaction } from '../../shared/types.ts';
@@ -6,20 +6,29 @@ import { buildSegments, tally } from '../../shared/accrual.ts';
 import type { SetAsideKind } from '../../shared/plan.ts';
 import { toLocalDate } from '../../shared/dates.ts';
 import { useBillMap, useCategories, useCategoryMap, useCategoryOf, useCoverage, useEngineData, useNow, useSetAsidePlan, useSettings, useSpendCheck, useTransactions } from '../lib/hooks.ts';
-import { bucketIndexAt, bucketsFor, periodBounds, periodTitle, shiftAnchor } from '../lib/periods.ts';
+import { bucketIndexAt, bucketsFor, periodBounds, periodTitle, shiftAnchor, type Range } from '../lib/periods.ts';
 import { categoryIcon } from '../lib/categories.ts';
 import { clock, dayLabel, minus, money, relativeDay, signed } from '../lib/format.ts';
-import { notCountedReason, spentByDay } from '../lib/money.ts';
+import { notCountedReason, setAsideInSpans, spentInSpans } from '../lib/money.ts';
 import { bankApi, useBank } from '../lib/bank.ts';
 import { go, openSheet, toast } from '../lib/ui.ts';
 import { BarChart, type BarDatum } from '../components/BarChart.tsx';
 import { BUDGET_COLORS, NetChart, type BudgetDay } from '../components/NetChart.tsx';
 import { Card, Chip, EmptyState, Segmented, SectionTitle } from '../components/ui.tsx';
 
-type SpendRange = 'week' | 'month';
 type ChartMode = 'left' | 'spent';
 
-const SET_ASIDE_NAMES: Array<[SetAsideKind, string]> = [
+const RANGES: Array<{ value: Range; label: string }> = [
+  { value: 'day', label: 'Day' },
+  { value: 'week', label: 'Week' },
+  { value: 'month', label: 'Month' },
+  { value: 'year', label: 'Year' },
+];
+
+/** What one bar covers in each range. */
+const UNIT: Record<Range, string> = { day: 'hour', week: 'day', month: 'day', year: 'month' };
+
+const KINDS: Array<[SetAsideKind, string]> = [
   ['bills', 'Bills'],
   ['savings', 'Savings'],
   ['goals', 'Wish list'],
@@ -107,9 +116,10 @@ export function Spending() {
   const { weekStartsOn } = useSettings();
   const txs = useTransactions();
   const cats = useCategories();
+  const catOf = useCategoryOf();
   const data = useEngineData();
   const counts = useSpendCheck();
-  const [range, setRange] = useState<SpendRange>('week');
+  const [range, setRange] = useState<Range>('week');
   const [mode, setMode] = useState<ChartMode>('left');
   const [anchor, setAnchor] = useState<LocalDate>(today);
   const [catFilter, setCatFilter] = useState<string | null>(null);
@@ -119,57 +129,66 @@ export function Spending() {
   const plan = useSetAsidePlan(from, to);
   const buckets = useMemo(() => bucketsFor(range, anchor, weekStartsOn), [range, anchor, weekStartsOn]);
   const nowIndex = bucketIndexAt(buckets, now);
+  const isCurrent = nowIndex >= 0;
   const windowKey = `${range}|${anchor}|${weekStartsOn}`;
-  const sel = picked?.key === windowKey ? picked.i : nowIndex >= 0 ? nowIndex : null;
+  const sel = picked?.key === windowKey ? picked.i : isCurrent ? nowIndex : null;
   const select = (i: number) => setPicked({ key: windowKey, i: sel === i ? null : i });
+  const unit = UNIT[range];
 
-  const catOf = useCategoryOf();
-  const counted = (tx: Transaction) => counts(tx) && (!catFilter || catOf(tx.categoryId) === catFilter);
-  // "Left" is about all your money, so the category filter only narrows the Spent view.
-  const spentDays = useMemo(
-    () => spentByDay(txs, from, to, (tx) => counts(tx) && (mode === 'left' || !catFilter || catOf(tx.categoryId) === catFilter)),
-    [txs, from, to, counts, catFilter, mode, catOf],
-  );
   const segs = useMemo(() => buildSegments(data, from, to, now), [data, from, to, now]);
-  const earnedDays = useMemo(() => buckets.map((b) => tally(segs, b.start, b.end, now)), [buckets, segs, now]);
+  const earnedIn = useMemo(() => buckets.map((b) => tally(segs, b.start, b.end, now)), [buckets, segs, now]);
+  // "Left" is about all your money, so the category filter only narrows the Spent view.
+  const spendCounts = useCallback(
+    (tx: Transaction) => counts(tx) && (mode === 'left' || !catFilter || catOf(tx.categoryId) === catFilter),
+    [counts, mode, catFilter, catOf],
+  );
+  const spentIn = useMemo(() => spentInSpans(txs, buckets, range === 'day', spendCounts), [txs, buckets, range, spendCounts]);
+  const asideIn = useMemo(
+    () => setAsideInSpans(plan, buckets, today, range === 'day' ? earnedIn.map((e) => e.value + e.projected) : undefined),
+    [plan, buckets, today, range, earnedIn],
+  );
 
-  const spent = [...spentDays.values()].reduce((t, v) => t + v, 0);
-  let billsSoFar = 0;
-  let billsTotal = 0;
+  const spent = spentIn.values.reduce((t, v) => t + v, 0) + spentIn.untimed;
+  const earned = earnedIn.reduce((t, e) => t + e.value, 0);
+  const stillScheduled = earnedIn.reduce((t, e) => t + e.projected, 0);
+  let asideSoFar = 0;
+  let asideTotal = 0;
   for (const [d, v] of plan.byDay) {
-    billsTotal += v;
-    if (d <= today) billsSoFar += v;
+    if (d < from || d > to) continue;
+    asideTotal += v;
+    if (d <= today) asideSoFar += v;
   }
-  const earned = earnedDays.reduce((t, e) => t + e.value, 0);
-  const left = earned - spent - billsSoFar;
+  const left = earned - spent - asideSoFar;
+  const onTrack = earned + stillScheduled - spent - asideTotal;
+  const unfinished = stillScheduled > 0.005 || asideTotal - asideSoFar > 0.005;
 
   const spentChart: BarDatum[] = buckets.map((b, i) => {
-    const bill = plan.byDay.get(b.date!) ?? 0;
-    const future = b.date! > today;
+    const future = b.start > now;
+    const aside = asideIn[i].total;
     return {
       key: b.key,
       label: b.label,
       title: b.title,
       current: i === nowIndex,
       parts: [
-        { id: 'spent', name: 'Spent', color: BUDGET_COLORS.spent, value: Math.max(0, spentDays.get(b.date!) ?? 0) },
-        { id: 'bills', name: 'Set aside', color: BUDGET_COLORS.setAside, value: future ? 0 : bill, projected: future ? bill : 0 },
+        { id: 'spent', name: 'Spent', color: BUDGET_COLORS.spent, value: Math.max(0, spentIn.values[i]) },
+        { id: 'aside', name: 'Set aside', color: BUDGET_COLORS.setAside, value: future ? 0 : aside, projected: future ? aside : 0 },
       ],
     };
   });
   const leftChart: BudgetDay[] = buckets.map((b, i) => {
-    const d = b.date!;
-    const future = d > today;
+    const future = b.start > now;
+    const aside = asideIn[i];
     return {
       key: b.key,
       label: b.label,
       title: b.title,
       current: i === nowIndex,
       projected: future,
-      earned: earnedDays[i].value + (future ? earnedDays[i].projected : 0),
-      setAside: plan.byDay.get(d) ?? 0,
-      setAsideParts: SET_ASIDE_NAMES.map(([k, name]) => ({ name, value: plan.byKind[k].get(d) ?? 0 })).filter((p) => p.value > 0.005),
-      spent: spentDays.get(d) ?? 0,
+      earned: earnedIn[i].value + (future ? earnedIn[i].projected : 0),
+      setAside: aside.total,
+      setAsideParts: KINDS.map(([k, name]) => ({ name, value: aside.kinds[k] })).filter((p) => p.value > 0.005),
+      spent: spentIn.values[i],
     };
   });
 
@@ -180,14 +199,27 @@ export function Spending() {
   }, [txs, from, to, counts, catOf]);
   const catTotal = byCat.reduce((t, [, v]) => t + v, 0);
 
-  const selDate = sel != null ? buckets[sel]?.date : undefined;
+  // The Day view always lists the whole day. The others narrow to the picked bar.
+  const listBucket = range === 'day' || sel == null ? undefined : buckets[sel];
+  const listFrom = listBucket ? toLocalDate(listBucket.start) : from;
+  const listTo = listBucket ? toLocalDate(listBucket.end - 1) : to;
+  const oneDay = listFrom === listTo ? listFrom : undefined;
+  const counted = (tx: Transaction) => counts(tx) && (!catFilter || catOf(tx.categoryId) === catFilter);
   const listed = txs
-    .filter((tx) => !tx.accountOff && tx.date >= from && tx.date <= to && (!selDate || tx.date === selDate) && (!catFilter || catOf(tx.categoryId) === catFilter))
+    .filter((tx) => !tx.accountOff && tx.date >= listFrom && tx.date <= listTo && (!catFilter || catOf(tx.categoryId) === catFilter))
     .sort((a, b) => b.date.localeCompare(a.date) || (b.at ?? 0) - (a.at ?? 0));
   const groups = new Map<LocalDate, Transaction[]>();
   for (const tx of listed) groups.set(tx.date, [...(groups.get(tx.date) ?? []), tx]);
-  const selDay = sel != null ? leftChart[sel] : undefined;
-  const selLeft = selDay ? selDay.earned - selDay.setAside - selDay.spent : 0;
+  const dayHeading = (d: LocalDate) => (relativeDay(d, today) === dayLabel(d) ? dayLabel(d) : `${relativeDay(d, today)} · ${dayLabel(d)}`);
+  const listTitle = oneDay ? dayHeading(oneDay) : listBucket ? listBucket.title : 'Transactions';
+  const newExpenseDate = oneDay ?? today;
+
+  const selBar = sel != null ? leftChart[sel] : undefined;
+  const selLeft = selBar ? selBar.earned - selBar.setAside - selBar.spent : 0;
+  let heading = 'Left';
+  if (mode === 'spent') heading = catFilter ? (cats.find((c) => c.id === catFilter)?.name ?? 'Spent') : 'Spent';
+  else if (range === 'day' && anchor === today) heading = 'Left today';
+  else if (range !== 'day' && isCurrent) heading = 'Left so far';
   const legend: Array<[string, string]> =
     mode === 'left'
       ? [
@@ -199,6 +231,7 @@ export function Spending() {
           ['Spent', BUDGET_COLORS.spent],
           ['Set aside', BUDGET_COLORS.setAside],
         ];
+  const labelEvery = range === 'day' ? 3 : range === 'month' ? 5 : 1;
 
   return (
     <div>
@@ -208,23 +241,14 @@ export function Spending() {
           <button className="btn btn-sm btn-secondary lg:hidden" onClick={() => go('plan')}>
             <PiggyBank size={16} /> Plan
           </button>
-          <button className="btn btn-sm btn-primary" onClick={() => openSheet({ kind: 'expense', date: selDate ?? today })}>
+          <button className="btn btn-sm btn-primary" onClick={() => openSheet({ kind: 'expense', date: newExpenseDate })}>
             <Plus size={16} /> Expense
           </button>
         </div>
       </header>
 
-      <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <Segmented<SpendRange>
-          label="Time range"
-          value={range}
-          options={[
-            { value: 'week', label: 'Week' },
-            { value: 'month', label: 'Month' },
-          ]}
-          onChange={setRange}
-          className="sm:w-64"
-        />
+      <div className="mt-2 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <Segmented<Range> label="Time range" value={range} options={RANGES} onChange={setRange} className="lg:w-96" />
         <div className="flex items-center justify-between gap-2">
           <button aria-label="Previous" onClick={() => setAnchor(shiftAnchor(range, anchor, -1))} className="grid size-10 place-items-center rounded-full bg-card text-ink-2 hover:text-ink">
             <ChevronLeft size={20} />
@@ -233,7 +257,7 @@ export function Spending() {
           <button aria-label="Next" onClick={() => setAnchor(shiftAnchor(range, anchor, 1))} className="grid size-10 place-items-center rounded-full bg-card text-ink-2 hover:text-ink">
             <ChevronRight size={20} />
           </button>
-          {nowIndex < 0 && (
+          {!isCurrent && (
             <button className="btn btn-sm btn-secondary" onClick={() => setAnchor(today)}>
               Now
             </button>
@@ -245,9 +269,7 @@ export function Spending() {
         <div>
           <Card className="p-5">
             <div className="flex items-center justify-between gap-3">
-              <p className="min-w-0 truncate text-[15px] font-medium text-ink-2">
-                {mode === 'left' ? (nowIndex >= 0 ? 'Left so far' : 'Left') : catFilter ? (cats.find((c) => c.id === catFilter)?.name ?? 'Spent') : 'Spent'}
-              </p>
+              <p className="min-w-0 truncate text-[15px] font-medium text-ink-2">{heading}</p>
               <Segmented<ChartMode>
                 label="Chart"
                 value={mode}
@@ -263,45 +285,57 @@ export function Spending() {
               {mode === 'left' ? signed(left) : money(spent)}
             </p>
             <p className="num mt-2.5 text-[14px] text-ink-2">
-              Earned {money(earned)} · spent {money(spent)} · set aside {money(mode === 'left' ? billsSoFar : billsTotal)}
+              Earned {money(earned)} · spent {money(spent)} · set aside {money(mode === 'left' ? asideSoFar : asideTotal)}
             </p>
+            {mode === 'left' && unfinished && (
+              <p className="num mt-1 text-[14px] text-ink-2">
+                On track for <span className="font-semibold text-ink">{signed(onTrack)}</span> by the end of the {range}
+              </p>
+            )}
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-ink-2">
               {legend.map(([name, color]) => (
                 <span key={name} className="flex items-center gap-2">
                   <span className="size-2.5 rounded-[3px]" style={{ background: color }} /> {name}
                 </span>
               ))}
-              {mode === 'left' && <span className="text-ink-3">Full bar = day's pay</span>}
+              {mode === 'left' && <span className="text-ink-3">Full bar = {unit}'s pay</span>}
             </div>
             <div className="mt-6">
               {mode === 'left' ? (
-                <NetChart ariaLabel="Each day's pay, split into set aside, spent, and left" data={leftChart} selected={sel} onSelect={select} labelEvery={range === 'month' ? 5 : 1} />
+                <NetChart ariaLabel={`Each ${unit}'s pay, split into set aside, spent, and left`} data={leftChart} selected={sel} onSelect={select} labelEvery={labelEvery} />
               ) : (
-                <BarChart ariaLabel="Spending and bills by day" data={spentChart} selected={sel} onSelect={select} format={money} labelEvery={range === 'month' ? 5 : 1} />
+                <BarChart ariaLabel={`Spending and set-asides by ${unit}`} data={spentChart} selected={sel} onSelect={select} format={money} labelEvery={labelEvery} />
               )}
             </div>
-            {selDay && (
+            {range === 'day' && Math.abs(spentIn.untimed) > 0.005 && (
+              <p className="num mt-3 text-[12px] text-ink-3">{money(spentIn.untimed)} spent without a time of day isn't in the hourly bars.</p>
+            )}
+            {selBar && (
               <div className="mt-5 border-t border-line pt-4">
+                <p className="mb-3 text-center text-[13px] font-semibold">
+                  {selBar.title}
+                  {sel === nowIndex && range !== 'day' && <span className="font-normal text-ink-2"> · so far</span>}
+                </p>
                 <div className="num grid grid-cols-4 gap-2 text-center text-[13px]">
                   <div>
-                    <p className="text-ink-2">{selDay.projected ? 'Scheduled' : 'Earned'}</p>
-                    <p className="font-semibold">{money(selDay.earned)}</p>
+                    <p className="text-ink-2">{selBar.projected ? 'Scheduled' : 'Earned'}</p>
+                    <p className="font-semibold">{money(selBar.earned)}</p>
                   </div>
                   <div>
                     <p className="text-ink-2">Set aside</p>
-                    <p className="font-semibold">{money(selDay.setAside)}</p>
+                    <p className="font-semibold">{money(selBar.setAside)}</p>
                   </div>
                   <div>
                     <p className="text-ink-2">Spent</p>
-                    <p className="font-semibold">{money(selDay.spent)}</p>
+                    <p className="font-semibold">{money(selBar.spent)}</p>
                   </div>
                   <div>
                     <p className="text-ink-2">Left</p>
                     <p className={clsx('font-semibold', selLeft >= 0 ? 'text-money' : 'text-spend')}>{signed(selLeft)}</p>
                   </div>
                 </div>
-                {!!selDay.setAsideParts?.length && (
-                  <p className="num mt-3 text-center text-[12px] text-ink-3">{selDay.setAsideParts.map((p) => `${p.name} ${money(p.value)}`).join(' · ')}</p>
+                {!!selBar.setAsideParts?.length && (
+                  <p className="num mt-3 text-center text-[12px] text-ink-3">{selBar.setAsideParts.map((p) => `${p.name} ${money(p.value)}`).join(' · ')}</p>
                 )}
               </div>
             )}
@@ -309,23 +343,23 @@ export function Spending() {
 
           <SectionTitle
             action={
-              selDate ? (
+              listBucket ? (
                 <button className="text-[14px] font-medium text-ink-2 hover:text-ink" onClick={() => setPicked({ key: windowKey, i: null })}>
                   Show the whole {range}
                 </button>
               ) : undefined
             }
           >
-            {selDate ? `${relativeDay(selDate, today)}${relativeDay(selDate, today) !== dayLabel(selDate) ? ` · ${dayLabel(selDate)}` : ''}` : 'Transactions'}
+            {listTitle}
           </SectionTitle>
           <Card className="overflow-hidden">
             {listed.length === 0 ? (
               <EmptyState
                 icon={<Receipt size={24} />}
-                title={selDate ? 'Nothing spent' : 'No spending yet'}
+                title={oneDay ? 'Nothing spent' : 'No spending yet'}
                 body="Add what you spend, or connect your bank, so each day shows what's left."
                 action={
-                  <button className="btn btn-primary" onClick={() => openSheet({ kind: 'expense', date: selDate ?? today })}>
+                  <button className="btn btn-primary" onClick={() => openSheet({ kind: 'expense', date: newExpenseDate })}>
                     <Plus size={18} /> Add expense
                   </button>
                 }
@@ -333,9 +367,9 @@ export function Spending() {
             ) : (
               [...groups.entries()].map(([date, list]) => (
                 <div key={date}>
-                  {!selDate && (
+                  {!oneDay && (
                     <p className="flex justify-between bg-raised/60 px-4 py-2 text-[13px] font-semibold text-ink-2">
-                      <span>{relativeDay(date, today) === dayLabel(date) ? dayLabel(date) : `${relativeDay(date, today)} · ${dayLabel(date)}`}</span>
+                      <span>{dayHeading(date)}</span>
                       <span className="num">{minus(list.filter(counted).reduce((t, tx) => t + tx.amount, 0))}</span>
                     </p>
                   )}
@@ -396,7 +430,9 @@ export function Spending() {
             <PiggyBank size={18} className="shrink-0 text-ink-2" />
             <span className="min-w-0 flex-1">
               <span className="block text-[15px] font-semibold">Bills, savings, and wish list</span>
-              <span className="block text-[13px] text-ink-2">{money(billsTotal)} set aside this {range}</span>
+              <span className="block text-[13px] text-ink-2">
+                {money(asideTotal)} set aside for {periodTitle(range, anchor, weekStartsOn)}
+              </span>
             </span>
             <ChevronRight size={18} className="shrink-0 text-ink-3" />
           </button>

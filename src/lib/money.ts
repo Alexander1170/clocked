@@ -1,6 +1,7 @@
 import type { Bill, Goal, LocalDate, ScheduledJob, Transaction } from '../../shared/types.ts';
 import { buildSegments, earnedBetween, valueIn, type EngineData } from '../../shared/accrual.ts';
-import { addDays, dayEnd, dayStart } from '../../shared/dates.ts';
+import { addDays, dayEnd, dayStart, toLocalDate } from '../../shared/dates.ts';
+import type { SetAsideKind, SetAsidePlan } from '../../shared/plan.ts';
 import { hourlyRate, nextPaydayOnOrAfter, periodForPayday, unpaidFrom, weeklyPaidHours } from '../../shared/pay.ts';
 import { money } from './format.ts';
 
@@ -45,10 +46,78 @@ export function spentBetween(txs: Transaction[], from: LocalDate, to: LocalDate,
   return t;
 }
 
-export function spentByDay(txs: Transaction[], from: LocalDate, to: LocalDate, counts: SpendCheck): Map<LocalDate, number> {
-  const out = new Map<LocalDate, number>();
-  for (const tx of txs) if (tx.date >= from && tx.date <= to && counts(tx)) out.set(tx.date, (out.get(tx.date) ?? 0) + tx.amount);
-  return out;
+/** A chart bar's time span: an hour, a day, or a month. */
+export interface Span {
+  start: number;
+  end: number;
+}
+
+const spanDays = (b: Span): [LocalDate, LocalDate] => [toLocalDate(b.start), toLocalDate(b.end - 1)];
+
+/**
+ * Counted spending in each bar. Day and month bars go by date. Hour bars need
+ * the time of day, so spending without one is added up separately as
+ * `untimed`.
+ */
+export function spentInSpans(txs: Transaction[], spans: Span[], hourly: boolean, counts: SpendCheck): { values: number[]; untimed: number } {
+  const values = spans.map(() => 0);
+  let untimed = 0;
+  if (!spans.length) return { values, untimed };
+  const days = spans.map(spanDays);
+  const first = days[0][0];
+  const last = days[days.length - 1][1];
+  for (const tx of txs) {
+    if (tx.date < first || tx.date > last || !counts(tx)) continue;
+    const at = tx.at;
+    const i = hourly ? (at == null ? -1 : spans.findIndex((b) => at >= b.start && at < b.end)) : days.findIndex(([a, z]) => tx.date >= a && tx.date <= z);
+    if (i >= 0) values[i] += tx.amount;
+    else if (hourly) untimed += tx.amount;
+  }
+  return { values, untimed };
+}
+
+export interface SpanSetAside {
+  total: number;
+  kinds: Record<SetAsideKind, number>;
+}
+
+const noKinds = (): Record<SetAsideKind, number> => ({ bills: 0, savings: 0, goals: 0 });
+
+/**
+ * What to set aside in each bar. Day and month bars add up their days; a bar
+ * that has started counts its days through today, the way pay counts what's
+ * earned so far. Hour bars split their day's set-aside by each hour's
+ * scheduled pay, or evenly when the day has none.
+ */
+export function setAsideInSpans(plan: Pick<SetAsidePlan, 'byDay' | 'byKind'>, spans: Span[], today: LocalDate, hourlyPay?: number[]): SpanSetAside[] {
+  const kindsOn = (d: LocalDate) => {
+    const k = noKinds();
+    for (const kind of Object.keys(k) as SetAsideKind[]) k[kind] = plan.byKind[kind].get(d) ?? 0;
+    return k;
+  };
+  if (hourlyPay) {
+    const day = spans.length ? toLocalDate(spans[0].start) : today;
+    const total = plan.byDay.get(day) ?? 0;
+    const kinds = kindsOn(day);
+    const pay = hourlyPay.reduce((t, v) => t + v, 0);
+    return spans.map((_, i) => {
+      const share = pay > 0.005 ? hourlyPay[i] / pay : 1 / spans.length;
+      const k = noKinds();
+      for (const kind of Object.keys(k) as SetAsideKind[]) k[kind] = kinds[kind] * share;
+      return { total: total * share, kinds: k };
+    });
+  }
+  return spans.map((b) => {
+    const [first, last] = spanDays(b);
+    const out: SpanSetAside = { total: 0, kinds: noKinds() };
+    for (let d = first; d <= last; d = addDays(d, 1)) {
+      if (first <= today && d > today) break;
+      out.total += plan.byDay.get(d) ?? 0;
+      const k = kindsOn(d);
+      for (const kind of Object.keys(k) as SetAsideKind[]) out.kinds[kind] += k[kind];
+    }
+    return out;
+  });
 }
 
 export interface PayInfo {
