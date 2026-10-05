@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import clsx from 'clsx';
-import { Briefcase, ChartColumn, House, PiggyBank, Plus, Receipt, Settings as Gear } from 'lucide-react';
+import { Briefcase, ChartColumn, House, Lightbulb, PiggyBank, Plus, Receipt, Settings as Gear } from 'lucide-react';
 import { buildSegments, hourlyChunks, valueIn } from '../../shared/accrual.ts';
 import { toLocalDate } from '../../shared/dates.ts';
 import { useEngineData, useJobMap, useNow } from '../lib/hooks.ts';
@@ -21,6 +21,7 @@ import { SyncBadge } from './SyncBadge.tsx';
 const NAV: Array<{ route: Route; label: string; icon: typeof House }> = [
   { route: 'today', label: 'Today', icon: House },
   { route: 'earnings', label: 'Earnings', icon: ChartColumn },
+  { route: 'insights', label: 'Insights', icon: Lightbulb },
   { route: 'spending', label: 'Spending', icon: Receipt },
   { route: 'plan', label: 'Plan', icon: PiggyBank },
 ];
@@ -40,19 +41,15 @@ export function TabBar({ route }: { route: Route }) {
   );
   return (
     <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-card/85 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl lg:hidden">
-      <div className="mx-auto flex max-w-lg items-center">
-        {NAV.slice(0, 2).map(tab)}
-        <div className="flex flex-1 justify-center">
-          <button
-            onClick={() => openSheet({ kind: 'add' })}
-            aria-label="Add"
-            className="grid size-12 place-items-center rounded-full bg-ink text-inverse shadow-[0_6px_18px_rgba(0,0,0,0.25)] transition-transform active:scale-95"
-          >
-            <Plus size={24} />
-          </button>
-        </div>
-        {NAV.slice(2).map(tab)}
-      </div>
+      <div className="mx-auto flex max-w-lg items-center">{NAV.map(tab)}</div>
+      {/* Add floats above the tabs so Insights can sit in the middle. */}
+      <button
+        onClick={() => openSheet({ kind: 'add' })}
+        aria-label="Add"
+        className="absolute right-4 bottom-[calc(100%+16px)] grid size-14 place-items-center rounded-full bg-ink text-inverse shadow-[0_8px_24px_rgba(0,0,0,0.3)] transition-transform active:scale-95"
+      >
+        <Plus size={26} />
+      </button>
     </nav>
   );
 }
@@ -120,7 +117,7 @@ export function SheetHost() {
         content = <BillSheet id={top.id} fromTx={top.fromTx} />;
         break;
       case 'saving':
-        content = <SavingSheet id={top.id} />;
+        content = <SavingSheet id={top.id} amount={top.amount} />;
         break;
       case 'goal':
         content = <GoalSheet id={top.id} type={top.type} />;

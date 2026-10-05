@@ -13,7 +13,7 @@ export type SheetSpec =
   | { kind: 'day'; jobId: string; date: LocalDate }
   | { kind: 'job'; id?: string; type?: 'scheduled' | 'gig' }
   | { kind: 'bill'; id?: string; fromTx?: string }
-  | { kind: 'saving'; id?: string }
+  | { kind: 'saving'; id?: string; amount?: number }
   | { kind: 'goal'; id?: string; type?: 'item' | 'project' }
   | { kind: 'category'; id?: string };
 
@@ -97,8 +97,8 @@ export function initTheme() {
 
 // ---- Routing (hash based, works offline and in the installed app) ----------
 
-export type Route = 'today' | 'earnings' | 'spending' | 'jobs' | 'settings' | 'plan' | 'bank' | 'categories';
-const ROUTES: Route[] = ['today', 'earnings', 'spending', 'jobs', 'settings', 'plan', 'bank', 'categories'];
+export type Route = 'today' | 'earnings' | 'insights' | 'spending' | 'jobs' | 'settings' | 'plan' | 'bank' | 'categories';
+const ROUTES: Route[] = ['today', 'earnings', 'insights', 'spending', 'jobs', 'settings', 'plan', 'bank', 'categories'];
 /** Older links still work. */
 const ALIASES: Record<string, Route> = { bills: 'plan' };
 

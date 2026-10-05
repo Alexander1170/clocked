@@ -31,7 +31,7 @@ function defaultDue(f: SavingFrequency, today: string): string {
   return endOfMonth(today);
 }
 
-export function SavingSheet({ id }: { id?: string }) {
+export function SavingSheet({ id, amount: suggested }: { id?: string; amount?: number }) {
   const existing = useData((s) => (id ? s.t.savings[id] : undefined));
   const put = useData((s) => s.put);
   const remove = useData((s) => s.remove);
@@ -42,7 +42,7 @@ export function SavingSheet({ id }: { id?: string }) {
   const unit = billSpread === 'everyday' ? 'day' : 'workday';
 
   const [name, setName] = useState(existing?.name ?? 'Savings');
-  const [amount, setAmount] = useState(existing ? String(existing.amount) : '');
+  const [amount, setAmount] = useState(existing ? String(existing.amount) : suggested ? String(suggested) : '');
   const [frequency, setFrequency] = useState<SavingFrequency>(existing?.frequency ?? (jobs.length ? 'paycheck' : 'monthly'));
   const [jobId, setJobId] = useState(existing?.jobId ?? jobs[0]?.id ?? '');
   const [dueDate, setDueDate] = useState(existing?.dueDate ?? defaultDue(existing?.frequency ?? (jobs.length ? 'paycheck' : 'monthly'), today));

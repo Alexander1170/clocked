@@ -3,7 +3,11 @@ import type { Bill, Category, GigJob, Goal, Job, LocalDate, Rule, Saving, Schedu
 import { planSetAsides, type SetAsidePlan } from '../../shared/plan.ts';
 import { makeSpendCheck, type Coverage, type SpendCheck } from './money.ts';
 import type { EngineData } from '../../shared/accrual.ts';
-import { toLocalDate } from '../../shared/dates.ts';
+import { addDays, toLocalDate } from '../../shared/dates.ts';
+import { upcomingPaychecks } from '../../shared/bills.ts';
+import { lastPaydayOnOrBefore, nextPaydayOnOrAfter } from '../../shared/pay.ts';
+import { checkAmount, spentBetween } from './money.ts';
+import { gigPayBetween, setAsideBetween, untilPayday, type UntilPayday } from './insights.ts';
 import { live, useData } from './store.ts';
 import { FALLBACK_CATEGORY } from './categories.ts';
 
@@ -143,4 +147,44 @@ export function useSetAsidePlan(from: LocalDate, to: LocalDate): SetAsidePlan {
     () => planSetAsides({ bills, savings, goals }, data, from, to, billSpread ?? 'workdays'),
     [bills, savings, goals, data, from, to, billSpread],
   );
+}
+
+export interface PaydayStretch extends UntilPayday {
+  job: ScheduledJob;
+  lastPayday: LocalDate;
+  nextPayday: LocalDate;
+  /** The last check, and what came out of it. */
+  check: number;
+  bills: number;
+  saving: number;
+  gig: number;
+  spent: number;
+}
+
+/**
+ * Money free from your last paycheck until the next one, for your main job:
+ * the check, less the bills paid from it and the savings planned until
+ * payday, plus gig pay, minus what you've spent since.
+ */
+export function useUntilPayday(now: number): PaydayStretch | null {
+  const today = toLocalDate(now);
+  const jobs = useJobs();
+  const bills = useBills();
+  const data = useEngineData();
+  const txs = useTransactions();
+  const counts = useSpendCheck();
+  const job = jobs.find((j): j is ScheduledJob => isScheduled(j) && j.takeHome > 0);
+  const lastPayday = job ? lastPaydayOnOrBefore(job, today) : null;
+  const nextPayday = job ? nextPaydayOnOrAfter(job, addDays(today, 1)) : null;
+  const plan = useSetAsidePlan(lastPayday ?? today, nextPayday ? addDays(nextPayday, -1) : today);
+  return useMemo(() => {
+    if (!job || !lastPayday || !nextPayday) return null;
+    const check = checkAmount(job, data, lastPayday, now);
+    // Bills paid from that check count even if they came before you started tracking them.
+    const paid = upcomingPaychecks(job, bills, data.jobs, lastPayday, 1, true)[0]?.billTotal ?? 0;
+    const saving = setAsideBetween(plan, lastPayday, addDays(nextPayday, -1));
+    const gig = gigPayBetween(data.gigs, lastPayday, today, now);
+    const spent = spentBetween(txs, lastPayday, today, counts);
+    return { job, lastPayday, nextPayday, check, bills: paid, saving, gig, spent, ...untilPayday({ check, bills: paid, saving, gig, spent, today, nextPayday }) };
+  }, [job, lastPayday, nextPayday, data, now, bills, plan, txs, counts, today]);
 }

@@ -216,6 +216,8 @@ export interface Settings extends BaseRecord {
   weekStartsOn: 0 | 1;
   /** Spread bills over the days you're scheduled to work, or over every day. */
   billSpread?: 'workdays' | 'everyday';
+  /** Your own weekly food budget. Unset means the app suggests one. */
+  foodWeekly?: number;
 }
 
 export interface CollectionMap {

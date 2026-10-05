@@ -83,7 +83,7 @@ const SLACK_DAYS = 80;
  * from the day after the previous one went out through the day it goes out,
  * but never before the bill's start date.
  */
-export function paymentsTouching(bill: Bill, from: LocalDate, to: LocalDate, jobs: readonly Job[] = []): BillPayment[] {
+export function paymentsTouching(bill: Bill, from: LocalDate, to: LocalDate, jobs: readonly Job[] = [], ignoreStart = false): BillPayment[] {
   if (bill.deleted || !(bill.amount > 0)) return [];
   const groups: Array<{ pay: LocalDate; dues: LocalDate[] }> = [];
   for (const due of dueDatesBetween(bill, addDays(from, -SLACK_DAYS), addDays(to, SLACK_DAYS))) {
@@ -98,7 +98,7 @@ export function paymentsTouching(bill: Bill, from: LocalDate, to: LocalDate, job
   for (let i = 1; i < groups.length; i++) {
     const g = groups[i];
     const start = addDays(groups[i - 1].pay, 1);
-    const saveFrom = start > bill.startDate ? start : bill.startDate;
+    const saveFrom = ignoreStart || start > bill.startDate ? start : bill.startDate;
     if (saveFrom > g.pay || g.pay < from || saveFrom > to) continue;
     out.push({ pay: g.pay, dues: g.dues, amount: bill.amount * g.dues.length, from: saveFrom });
   }
@@ -191,9 +191,10 @@ export interface Paycheck {
 /**
  * A job's next paychecks and the bills each one pays: the ones set to that
  * paycheck, plus bills paid on their due date before the next payday (those
- * count against the first scheduled job only).
+ * count against the first scheduled job only). With `ignoreStart`, payments
+ * from before a bill's start date count too: they were still paid.
  */
-export function upcomingPaychecks(job: ScheduledJob, bills: readonly Bill[], jobs: readonly Job[], from: LocalDate, count: number): Paycheck[] {
+export function upcomingPaychecks(job: ScheduledJob, bills: readonly Bill[], jobs: readonly Job[], from: LocalDate, count: number, ignoreStart = false): Paycheck[] {
   const paydays = paydaysBetween(job, from, addDays(from, 31 * (count + 1))).slice(0, count + 1);
   const primary = jobs.find((j): j is ScheduledJob => !j.deleted && j.kind === 'scheduled')?.id === job.id;
   const out: Paycheck[] = [];
@@ -205,7 +206,7 @@ export function upcomingPaychecks(job: ScheduledJob, bills: readonly Bill[], job
       if (bill.deleted) continue;
       const payJob = billPayJob(bill, jobs);
       if (payJob ? payJob.id !== job.id : !primary) continue;
-      for (const p of paymentsTouching(bill, payday, addDays(until, -1), jobs)) {
+      for (const p of paymentsTouching(bill, payday, addDays(until, -1), jobs, ignoreStart)) {
         if (payJob ? p.pay === payday : p.pay >= payday && p.pay < until) list.push({ bill, pay: p.pay, dues: p.dues, amount: p.amount });
       }
     }

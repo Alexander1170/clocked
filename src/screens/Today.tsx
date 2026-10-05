@@ -4,7 +4,22 @@ import { Bike, Briefcase, CalendarDays, ChevronRight, Plus, Settings as Gear, Sq
 import type { GigJob, GigSession, LocalDate, ScheduledJob } from '../../shared/types.ts';
 import { buildSegments, tally, type Segment } from '../../shared/accrual.ts';
 import { addDays, dayEnd, dayStart, toLocalDate } from '../../shared/dates.ts';
-import { useActiveDash, useBills, useCategoryMap, useCoverage, useEngineData, useJobMap, useJobs, useNow, useSetAsidePlan, useSpendCheck, useTransactions, isGig, isScheduled } from '../lib/hooks.ts';
+import {
+  useActiveDash,
+  useBills,
+  useCategoryMap,
+  useCoverage,
+  useEngineData,
+  useJobMap,
+  useJobs,
+  useNow,
+  useSetAsidePlan,
+  useSpendCheck,
+  useTransactions,
+  useUntilPayday,
+  isGig,
+  isScheduled,
+} from '../lib/hooks.ts';
 import { buildDayFeed } from '../lib/feed.ts';
 import { checkAmount, payInfo, spentBetween } from '../lib/money.ts';
 import { upcomingPaychecks, type Paycheck } from '../../shared/bills.ts';
@@ -148,6 +163,8 @@ function DashCard({ job, dash, now }: { job: GigJob; dash: GigSession | null; no
 
 export function Today() {
   const now = useNow(1000);
+  // Once a minute is plenty for the paycheck math.
+  const stretch = useUntilPayday(Math.floor(now / 60_000) * 60_000);
   const today = toLocalDate(now);
   const data = useEngineData();
   const jobs = useJobs();
@@ -298,6 +315,19 @@ export function Today() {
                 <span className={clsx('num text-[24px] font-bold tracking-tight', left >= 0 ? 'text-money' : 'text-spend')}>{signed(left)}</span>
               </div>
             </Card>
+
+            {stretch && (
+              <button onClick={() => go('insights')} className="card mt-3 flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-hover">
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[13px] font-medium text-ink-2">Free until payday · {dayLabel(stretch.nextPayday)}</span>
+                  <span className={clsx('num mt-1 block text-[24px] font-bold tracking-tight', stretch.free < 0 && 'text-spend')}>{money(stretch.free)}</span>
+                  <span className="num block text-[13px] text-ink-2">
+                    {stretch.free >= 0 ? `About ${money(stretch.perDay)} a day · see insights` : 'More than this check had. Go easy until payday.'}
+                  </span>
+                </span>
+                <ChevronRight size={18} className="shrink-0 text-ink-3" />
+              </button>
+            )}
 
             {pay.map((p) => {
               // On payday, the bills to pay from today's check.

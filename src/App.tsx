@@ -13,6 +13,7 @@ import { Settings } from './screens/Settings.tsx';
 import { Plan } from './screens/Plan.tsx';
 import { Bank } from './screens/Bank.tsx';
 import { Categories } from './screens/Categories.tsx';
+import { Insights } from './screens/Insights.tsx';
 
 let booted = false;
 
@@ -37,9 +38,10 @@ export default function App() {
     <div className="min-h-dvh bg-page text-ink">
       <Sidebar route={route} />
       <main className="lg:pl-60">
-        <div className="mx-auto max-w-6xl px-4 pt-[max(env(safe-area-inset-top),16px)] pb-[calc(env(safe-area-inset-bottom)+112px)] sm:px-6 lg:px-10 lg:pt-8 lg:pb-16">
+        <div className="mx-auto max-w-6xl px-4 pt-[max(env(safe-area-inset-top),16px)] pb-[calc(env(safe-area-inset-bottom)+152px)] sm:px-6 lg:px-10 lg:pt-8 lg:pb-16">
           {route === 'today' && <Today />}
           {route === 'earnings' && <Earnings />}
+          {route === 'insights' && <Insights />}
           {route === 'spending' && <Spending />}
           {route === 'jobs' && <Jobs />}
           {route === 'settings' && <Settings />}

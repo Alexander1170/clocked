@@ -29,6 +29,8 @@
   --c-money: #067a3f;
   /* "Left" bar segment: validated against --s7 and --s8 for color blindness. */
   --c-left: #0d9488;
+  /* Savings in the pay donut: validated against --s7, --s8, and --c-left. */
+  --c-save: #ae71d1;
   --c-spend: #c8312f;
   --c-hover: rgba(11, 11, 12, 0.04);
   --c-inverse: #ffffff;
@@ -56,6 +58,7 @@
     --c-grid: #25272c;
     --c-money: #3dd68c;
     --c-left: #1aa39a;
+    --c-save: #a84d95;
     --c-spend: #ff6b6b;
     --c-hover: rgba(255, 255, 255, 0.05);
     --c-inverse: #0a0b0d;
@@ -82,6 +85,7 @@
   --c-grid: #25272c;
   --c-money: #3dd68c;
   --c-left: #1aa39a;
+  --c-save: #a84d95;
   --c-spend: #ff6b6b;
   --c-hover: rgba(255, 255, 255, 0.05);
   --c-inverse: #0a0b0d;
