@@ -45,6 +45,7 @@ import { Donut } from '../components/Donut.tsx';
 import { LineChart } from '../components/LineChart.tsx';
 import { MonthHeatmap } from '../components/MonthHeatmap.tsx';
 import { BUDGET_COLORS } from '../components/NetChart.tsx';
+import { LeftoverCard } from '../components/LeftoverCard.tsx';
 
 /** Validated together for color blindness, light and dark. */
 const SPLIT_COLORS = { bills: 'var(--s7)', saving: 'var(--c-save)', spent: 'var(--s8)', free: 'var(--c-left)' };
@@ -230,6 +231,7 @@ export function Insights() {
       <p className="mt-1 text-[15px] text-ink-2">The big picture: what you have, where it goes, and what you can put away.</p>
 
       <div className="mt-4 grid grid-cols-[minmax(0,1fr)] gap-3 lg:grid-cols-2">
+        {stretch && <LeftoverCard stretch={stretch} now={now} />}
         {stretch && (
           <Card className="p-5">
             <CardTitle icon={<CalendarDays size={17} />} aside={`${dayLabel(stretch.nextPayday)}, ${daysUntil(stretch.nextPayday, today)}`}>
@@ -250,11 +252,6 @@ export function Insights() {
               <p className="num mt-3 rounded-2xl bg-raised px-3.5 py-2.5 text-[13px] text-ink-2">
                 Last paycheck ran {money(-stretch.carry)} short, so it comes out of this one. That's about{' '}
                 <span className="font-semibold text-ink">{money(-stretch.carry / stretch.daysLeft)} a day less</span> until payday.
-              </p>
-            )}
-            {stretch.carry >= -0.005 && stretch.lastEnd != null && stretch.lastEnd > 5 && (
-              <p className="num mt-3 text-[13px] text-ink-2">
-                You finished your last paycheck with {money(stretch.lastEnd)} to spare. Nice. Moving it to savings keeps it safe.
               </p>
             )}
             <div className="mt-4 space-y-1.5 border-t border-line pt-3">

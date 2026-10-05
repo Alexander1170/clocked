@@ -31,6 +31,7 @@ import { newId } from '../lib/ids.ts';
 import { Card, Dot, EmptyState, SectionTitle } from '../components/ui.tsx';
 import { FeedList } from '../components/Feed.tsx';
 import { PaycheckCard } from '../components/PaycheckCard.tsx';
+import { LeftoverCard } from '../components/LeftoverCard.tsx';
 import { SyncBadge } from '../components/SyncBadge.tsx';
 
 /** Dollars per minute accruing right now from scheduled work. */
@@ -332,6 +333,7 @@ export function Today() {
                 <ChevronRight size={18} className="shrink-0 text-ink-3" />
               </button>
             )}
+            {stretch && <LeftoverCard stretch={stretch} now={Math.floor(now / 60_000) * 60_000} className="mt-3" />}
 
             {pay.map((p) => {
               // On payday, the bills to pay from today's check.

@@ -3,10 +3,10 @@ import clsx from 'clsx';
 import { ExternalLink, Gift, Package, Plus, Trash, X } from 'lucide-react';
 import type { Goal, WishItem } from '../../shared/types.ts';
 import { earningDays } from '../../shared/bills.ts';
-import { goalStatus } from '../../shared/plan.ts';
+import { goalStatus, movesFor } from '../../shared/plan.ts';
 import { addDays, toLocalDate } from '../../shared/dates.ts';
 import { useData } from '../lib/store.ts';
-import { useEngineData, useSettings, useTransactions } from '../lib/hooks.ts';
+import { useEngineData, useMoves, useSettings, useTransactions } from '../lib/hooks.ts';
 import { newId } from '../lib/ids.ts';
 import { dayLabel, money } from '../lib/format.ts';
 import { closeSheet, toast } from '../lib/ui.ts';
@@ -55,6 +55,8 @@ export function GoalSheet({ id, type }: { id?: string; type?: 'item' | 'project'
   const [name, setName] = useState(existing?.name ?? '');
   const [targetDate, setTargetDate] = useState(existing?.targetDate ?? addDays(today, 30));
   const [note, setNote] = useState(existing?.note ?? '');
+  const [first, setFirst] = useState(!!existing?.first);
+  const moves = useMoves();
   const [items, setItems] = useState<Draft[]>(() => (existing?.items.length ? existing.items.map(toDraft) : kind === 'item' ? [blank(today)] : [blank(today)]));
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState('');
@@ -75,8 +77,8 @@ export function GoalSheet({ id, type }: { id?: string; type?: 'item' | 'project'
         addedOn: i.addedOn,
         boughtOn: i.boughtOn,
       }));
-  const draft: Goal = { id: id ?? 'draft', updatedAt: 0, kind, name, targetDate, items: toItems() };
-  const st = goalStatus(draft, today, isEarningDay);
+  const draft: Goal = { id: id ?? 'draft', updatedAt: 0, kind, name, targetDate, items: toItems(), first: first || undefined };
+  const st = goalStatus(draft, today, isEarningDay, movesFor(draft.id, moves));
 
   const save = () => {
     if (!name.trim()) return setError(kind === 'item' ? 'What do you want?' : 'Name the project.');
@@ -204,6 +206,14 @@ export function GoalSheet({ id, type }: { id?: string; type?: 'item' | 'project'
           </>
         )}
 
+        <div className="flex items-center justify-between gap-4 rounded-2xl bg-raised px-4 py-3">
+          <span>
+            <span className="block text-[15px] font-medium">Get it sooner</span>
+            <span className="block text-[13px] text-ink-2">Money left over after a paycheck goes here first.</span>
+          </span>
+          <Toggle checked={first} onChange={setFirst} label="Get it sooner" />
+        </div>
+
         {st.total > 0 && (
           <div className="rounded-3xl border border-line p-4">
             <p className="num text-[24px] font-bold tracking-tight">
@@ -212,7 +222,8 @@ export function GoalSheet({ id, type }: { id?: string; type?: 'item' | 'project'
             </p>
             <p className="num mt-1 text-[14px] text-ink-2">
               {money(st.total)} by {dayLabel(targetDate)}
-              {st.saved > 0 && ` · ${money(st.saved)} set aside so far`}. Link the purchase when you buy it so it doesn't count as spending that day.
+              {st.saved > 0 && ` · ${money(st.saved)} set aside so far`}
+              {st.moved > 0 && `, ${money(st.moved)} of it from leftovers`}. Link the purchase when you buy it so it doesn't count as spending that day.
             </p>
           </div>
         )}

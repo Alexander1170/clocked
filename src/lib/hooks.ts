@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Bill, Category, GigJob, Goal, Job, LocalDate, Rule, Saving, ScheduledJob, Settings } from '../../shared/types.ts';
+import type { Bill, Category, GigJob, Goal, Job, LocalDate, Move, Rule, Saving, ScheduledJob, Settings } from '../../shared/types.ts';
 import { planSetAsides, type SetAsidePlan } from '../../shared/plan.ts';
 import { makeSpendCheck, type Coverage, type SpendCheck } from './money.ts';
 import type { EngineData } from '../../shared/accrual.ts';
@@ -118,6 +118,12 @@ export function useGoalMap(): Record<string, Goal> {
   return useData((s) => s.t.goals);
 }
 
+/** Where leftover paycheck money went, newest first. */
+export function useMoves(): Move[] {
+  const moves = useData((s) => s.t.moves);
+  return useMemo(() => live(moves).sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt ?? 0) - (a.createdAt ?? 0)), [moves]);
+}
+
 export function useGoals(): Goal[] {
   const goals = useGoalMap();
   return useMemo(() => live(goals).sort((a, b) => a.targetDate.localeCompare(b.targetDate)), [goals]);
@@ -141,11 +147,12 @@ export function useSetAsidePlan(from: LocalDate, to: LocalDate): SetAsidePlan {
   const bills = useBills();
   const savings = useSavings();
   const goals = useGoals();
+  const moves = useMoves();
   const data = useEngineData();
   const { billSpread } = useSettings();
   return useMemo(
-    () => planSetAsides({ bills, savings, goals }, data, from, to, billSpread ?? 'workdays'),
-    [bills, savings, goals, data, from, to, billSpread],
+    () => planSetAsides({ bills, savings, goals, moves }, data, from, to, billSpread ?? 'workdays'),
+    [bills, savings, goals, moves, data, from, to, billSpread],
   );
 }
 
@@ -161,6 +168,8 @@ export interface PaydayStretch extends UntilPayday {
   spent: number;
   /** How the paycheck before ended, when you were tracking spending then. */
   lastEnd: number | null;
+  /** That paycheck's payday. */
+  prevPayday: LocalDate | null;
 }
 
 /** How far back a shortfall can carry from. Older ones are forgiven. */
@@ -210,6 +219,7 @@ export function useUntilPayday(now: number): PaydayStretch | null {
       spent: cur.spent,
       // Without spending tracked then, how it ended doesn't mean much.
       lastEnd: before && before.spent > 0.005 ? endings[endings.length - 1].end : null,
+      prevPayday: paydays.length > 1 ? paydays[paydays.length - 2] : null,
       ...untilPayday({ ...cur, today, nextPayday, carry }),
     };
   }, [job, lastPayday, nextPayday, paydays, data, now, bills, plan, txs, counts, today]);

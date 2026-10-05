@@ -12,6 +12,7 @@ import {
   monthSplit,
   saveIdea,
   setAsideBetween,
+  splitLeftover,
   stretchEndings,
   untilPayday,
 } from '../src/lib/insights.ts';
@@ -126,5 +127,41 @@ describe('month split', () => {
     expect(monthSplit({ pay: 4000, bills: 2500, saving: 200, spent: 300 })).toEqual({ free: 1000, over: 0 });
     expect(monthSplit({ pay: 4000, bills: 2500, saving: 200, spent: 1500 })).toEqual({ free: 0, over: 200 });
     expect(cumulative([1, 2, 3])).toEqual([1, 3, 6]);
+  });
+});
+
+describe('splitting leftover money', () => {
+  const plan = (id: string, left: number, targetDate: string, first?: boolean) => ({ id, name: id, left, targetDate, first });
+
+  it('sends it all to savings with no plans', () => {
+    expect(splitLeftover(214.8, [], '2026-10-13')).toEqual({ savings: 214, plans: [] });
+  });
+
+  it('splits 60% to savings and 40% to plans, by what each still needs', () => {
+    const s = splitLeftover(200, [plan('a', 300, '2026-12-15'), plan('b', 100, '2027-01-15')], '2026-10-13');
+    expect(s).toEqual({
+      savings: 120,
+      plans: [
+        { id: 'a', name: 'a', amount: 60, why: 'share' },
+        { id: 'b', name: 'b', amount: 20, why: 'share' },
+      ],
+    });
+  });
+
+  it('gives a plan due soon what it needs first', () => {
+    const s = splitLeftover(200, [plan('soon', 50, '2026-10-23'), plan('later', 300, '2026-12-15')], '2026-10-13');
+    expect(s.plans).toEqual([
+      { id: 'soon', name: 'soon', amount: 50, why: 'soon' },
+      { id: 'later', name: 'later', amount: 60, why: 'share' },
+    ]);
+    expect(s.savings).toBe(90);
+  });
+
+  it('puts a plan you want sooner first, even if that takes it all', () => {
+    expect(splitLeftover(200, [plan('car', 500, '2027-06-01', true)], '2026-10-13')).toEqual({ savings: 0, plans: [{ id: 'car', name: 'car', amount: 200, why: 'first' }] });
+  });
+
+  it('never gives a plan more than it still needs', () => {
+    expect(splitLeftover(200, [plan('tiny', 10, '2027-01-15')], '2026-10-13')).toEqual({ savings: 190, plans: [{ id: 'tiny', name: 'tiny', amount: 10, why: 'share' }] });
   });
 });

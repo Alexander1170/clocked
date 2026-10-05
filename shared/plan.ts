@@ -1,5 +1,5 @@
 // Savings and wish-list goals, plus one combined daily set-aside with bills.
-import type { Bill, Goal, Job, LocalDate, Saving, WishItem } from './types.ts';
+import type { Bill, Goal, Job, LocalDate, Move, Saving, WishItem } from './types.ts';
 import type { EngineData } from './accrual.ts';
 import { addDays } from './dates.ts';
 import { billShares, dueDatesBetween, earningDays, shareDays, windowsTouching } from './bills.ts';
@@ -107,44 +107,74 @@ export function itemWindow(item: WishItem, g: Goal): { from: LocalDate; to: Loca
   return { from: item.addedOn, to: g.targetDate >= item.addedOn ? g.targetDate : item.addedOn };
 }
 
-export function goalShares(g: Goal, from: LocalDate, to: LocalDate, isEarningDay: IsEarningDay): Map<LocalDate, number> {
+/** Extra money put toward a goal on a day, like a paycheck's leftovers. */
+export interface GoalMove {
+  date: LocalDate;
+  amount: number;
+}
+
+/**
+ * Every day's share of a goal across its whole span. Each move covers part of
+ * what was still to be set aside from its day on, so every later day shrinks
+ * by the same fraction. Earlier days stay as they were.
+ */
+function allGoalShares(g: Goal, isEarningDay: IsEarningDay, moves: readonly GoalMove[]): Map<LocalDate, number> {
   const out = new Map<LocalDate, number>();
-  if (g.deleted) return out;
   for (const item of g.items) {
     if (!(item.price > 0)) continue;
     const w = itemWindow(item, g);
-    if (w.to < from || w.from > to) continue;
     const days = shareDays(w.from, w.to, isEarningDay);
     const share = item.price / days.length;
-    for (const d of days) if (d >= from && d <= to) out.set(d, (out.get(d) ?? 0) + share);
+    for (const d of days) out.set(d, (out.get(d) ?? 0) + share);
   }
+  const days = [...out.keys()].sort();
+  for (const m of [...moves].sort((a, b) => a.date.localeCompare(b.date))) {
+    let rest = 0;
+    for (const d of days) if (d >= m.date) rest += out.get(d)!;
+    if (rest <= 0.005) continue;
+    const k = Math.max(0, (rest - m.amount) / rest);
+    for (const d of days) if (d >= m.date) out.set(d, out.get(d)! * k);
+  }
+  return out;
+}
+
+export function goalShares(g: Goal, from: LocalDate, to: LocalDate, isEarningDay: IsEarningDay, moves: readonly GoalMove[] = []): Map<LocalDate, number> {
+  const out = new Map<LocalDate, number>();
+  if (g.deleted) return out;
+  for (const [d, v] of allGoalShares(g, isEarningDay, moves)) if (d >= from && d <= to && v > 0) out.set(d, v);
   return out;
 }
 
 export interface GoalStatus {
   total: number;
+  /** Set aside through today, plus money moved toward it. */
   saved: number;
-  /** What the goal takes on a workday right now (items whose window is still open). */
+  /** Still to set aside after today. */
+  left: number;
+  /** Extra money moved toward it so far. */
+  moved: number;
+  /** What the goal takes on its next day with a share. */
   perDay: number;
   bought: number;
   /** Past the date and fully set aside. */
   done: boolean;
 }
 
-export function goalStatus(g: Goal, today: LocalDate, isEarningDay: IsEarningDay): GoalStatus {
-  let total = 0;
-  let saved = 0;
+export function goalStatus(g: Goal, today: LocalDate, isEarningDay: IsEarningDay, moves: readonly GoalMove[] = []): GoalStatus {
+  const total = g.items.reduce((t, i) => t + (i.price > 0 ? i.price : 0), 0);
+  const shares = allGoalShares(g, isEarningDay, moves);
+  const moved = moves.filter((m) => m.date <= today).reduce((t, m) => t + m.amount, 0);
+  let saved = moved;
+  let left = 0;
   let perDay = 0;
-  for (const item of g.items) {
-    if (!(item.price > 0)) continue;
-    total += item.price;
-    const w = itemWindow(item, g);
-    const days = shareDays(w.from, w.to, isEarningDay);
-    const share = item.price / days.length;
-    saved += share * days.filter((d) => d <= today).length;
-    if (w.to >= today) perDay += share;
+  for (const d of [...shares.keys()].sort()) {
+    const v = shares.get(d)!;
+    if (d <= today) saved += v;
+    else left += v;
+    if (d >= today && !perDay) perDay = v;
   }
-  return { total, saved, perDay, bought: g.items.filter((i) => i.boughtOn).length, done: today > g.targetDate && saved >= total - 0.005 };
+  saved = Math.min(saved, total);
+  return { total, saved, left, moved, perDay, bought: g.items.filter((i) => i.boughtOn).length, done: today > g.targetDate && saved >= total - 0.005 };
 }
 
 // ---- Everything together ------------------------------------------------------
@@ -164,7 +194,12 @@ export interface SetAsides {
   bills: Bill[];
   savings: Saving[];
   goals: Goal[];
+  /** Leftover money put toward goals. */
+  moves?: readonly Move[];
 }
+
+/** The leftover money that went toward one goal. */
+export const movesFor = (goalId: string, moves: readonly Move[] = []): GoalMove[] => moves.filter((m) => !m.deleted && m.to === 'goal' && m.goalId === goalId);
 
 /** Every daily set-aside over [from, to], with one earning-day lookup that covers all their windows. */
 export function planSetAsides(input: SetAsides, data: EngineData, from: LocalDate, to: LocalDate, spread: 'workdays' | 'everyday' = 'workdays'): SetAsidePlan {
@@ -191,6 +226,6 @@ export function planSetAsides(input: SetAsides, data: EngineData, from: LocalDat
   };
   for (const b of input.bills) add('bills', b.id, billShares(b, from, to, isEarningDay, data.jobs));
   for (const s of input.savings) add('savings', s.id, savingShares(s, from, to, isEarningDay, data.jobs));
-  for (const g of input.goals) add('goals', g.id, goalShares(g, from, to, isEarningDay));
+  for (const g of input.goals) add('goals', g.id, goalShares(g, from, to, isEarningDay, movesFor(g.id, input.moves)));
   return plan;
 }

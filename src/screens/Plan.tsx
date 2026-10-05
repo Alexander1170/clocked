@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import { CalendarClock, ChevronRight, Gift, Package, PiggyBank, Plus } from 'lucide-react';
 import type { Bill, BillFrequency, Goal, Saving, SavingFrequency } from '../../shared/types.ts';
 import { billStatus, earningDays, upcomingPaychecks, type BillStatus } from '../../shared/bills.ts';
-import { goalStatus, savingStatus } from '../../shared/plan.ts';
+import { goalStatus, movesFor, savingStatus } from '../../shared/plan.ts';
 import { addDays, diffDays, toLocalDate } from '../../shared/dates.ts';
 import {
   isScheduled,
@@ -13,6 +13,7 @@ import {
   useGoals,
   useJobMap,
   useJobs,
+  useMoves,
   useNow,
   useSavings,
   useSetAsidePlan,
@@ -129,7 +130,10 @@ export function Plan() {
     [payJob, bills, data, today, now],
   );
 
-  const goalRows = goals.map((g) => ({ goal: g, status: goalStatus(g, today, isEarningDay) }));
+  const moves = useMoves();
+  const goalRows = goals.map((g) => ({ goal: g, status: goalStatus(g, today, isEarningDay, movesFor(g.id, moves)) }));
+  const toSavings = moves.filter((m) => m.to === 'savings');
+  const savedFromLeftovers = toSavings.reduce((t, m) => t + m.amount, 0);
   const activeGoals = goalRows.filter((r) => !r.status.done);
   const doneGoals = goalRows.filter((r) => r.status.done);
 
@@ -250,6 +254,20 @@ export function Plan() {
             </>
           ))}
 
+        {tab === 'savings' && savedFromLeftovers > 0.005 && (
+          <div className="card flex items-center gap-3 p-4">
+            <span className="grid size-10 shrink-0 place-items-center rounded-full bg-raised text-ink-2">
+              <PiggyBank size={18} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-semibold">From leftovers</span>
+              <span className="block text-[13px] text-ink-2">
+                Moved to savings from {toSavings.length} {toSavings.length === 1 ? 'paycheck' : 'paychecks'} that finished with money to spare
+              </span>
+            </span>
+            <span className="num shrink-0 text-[16px] font-semibold">{money(savedFromLeftovers)}</span>
+          </div>
+        )}
         {tab === 'savings' &&
           (savings.length === 0 ? (
             <Card>
@@ -347,6 +365,7 @@ export function Plan() {
                   <span className={clsx('num mt-2 flex justify-between gap-2 text-[13px] text-ink-2', st.done && 'opacity-80')}>
                     <span>
                       {money(st.saved)} of {money(st.total)}
+                      {st.moved > 0.005 && <span className="text-ink-3"> · {money(st.moved)} from leftovers</span>}
                     </span>
                     {!st.done && st.perDay > 0 && (
                       <span className="font-semibold text-ink">

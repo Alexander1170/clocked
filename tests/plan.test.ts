@@ -129,3 +129,27 @@ describe('everything together', () => {
     expect(plan.byDay.get('2026-10-05')).toBeCloseTo(100 / 9 + 19.5, 6);
   });
 });
+
+describe('leftover money toward a goal', () => {
+  const everyDay = () => true;
+  // $100 over Oct 1-10, every day: $10 a day.
+  const g = goal({ targetDate: '2026-10-10', items: [{ id: 'i1', name: 'Shoes', price: 100, addedOn: '2026-10-01' }] });
+  const moves = [{ date: '2026-10-06', amount: 30 }];
+
+  it('shrinks the days after the money moved, and leaves the days before alone', () => {
+    const shares = goalShares(g, '2026-10-01', '2026-10-10', everyDay, moves);
+    expect(shares.get('2026-10-05')).toBeCloseTo(10, 6);
+    expect(shares.get('2026-10-06')).toBeCloseTo(4, 6);
+    expect(sum(shares) + 30).toBeCloseTo(100, 6);
+  });
+
+  it('counts the money moved as saved', () => {
+    const st = goalStatus(g, '2026-10-06', everyDay, moves);
+    expect(st).toMatchObject({ total: 100, moved: 30 });
+    expect(st.saved).toBeCloseTo(84, 6);
+    expect(st.left).toBeCloseTo(16, 6);
+    expect(st.perDay).toBeCloseTo(4, 6);
+    // Moving everything that's left finishes it.
+    expect(goalStatus(g, '2026-10-06', everyDay, [{ date: '2026-10-06', amount: 50 }]).left).toBeCloseTo(0, 6);
+  });
+});

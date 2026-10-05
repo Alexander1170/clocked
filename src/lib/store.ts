@@ -4,7 +4,7 @@ import * as idb from './idb.ts';
 
 export type Tables = { [K in CollectionName]: Record<string, CollectionMap[K]> };
 
-const emptyTables = (): Tables => ({ jobs: {}, overrides: {}, gigs: {}, transactions: {}, categories: {}, settings: {}, bills: {}, rules: {}, savings: {}, goals: {} });
+const emptyTables = (): Tables => ({ jobs: {}, overrides: {}, gigs: {}, transactions: {}, categories: {}, settings: {}, bills: {}, rules: {}, savings: {}, goals: {}, moves: {} });
 
 type Draft<K extends CollectionName> = Omit<CollectionMap[K], 'updatedAt'> & { updatedAt?: number };
 

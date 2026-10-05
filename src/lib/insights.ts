@@ -169,3 +169,55 @@ export function gigPayBetween(gigs: readonly GigSession[], from: LocalDate, to: 
   const b = dayStart(addDays(to, 1));
   return gigs.filter((g) => !g.deleted && g.start >= a && g.start < b && g.start <= now).reduce((t, g) => t + (g.earnings || 0), 0);
 }
+
+/** Of money left over after a paycheck, the part that goes to savings. The rest goes to your plans. */
+export const SAVINGS_SHARE = 0.6;
+/** A plan due within this many days is close: it gets what it still needs first. */
+export const SOON_DAYS = 21;
+
+export interface LeftoverPlan {
+  id: string;
+  name: string;
+  /** Still to set aside for it. */
+  left: number;
+  targetDate: LocalDate;
+  /** You want it sooner. */
+  first?: boolean;
+}
+
+export interface LeftoverSplit {
+  savings: number;
+  plans: Array<{ id: string; name: string; amount: number; why: 'first' | 'soon' | 'share' }>;
+}
+
+/**
+ * How to split money left over from a paycheck, in whole dollars. Plans you
+ * want sooner, then plans due within three weeks, get what they still need
+ * first. The rest goes 60% to savings and 40% to your other plans, shared by
+ * how much each still needs. With no plans, it all goes to savings.
+ */
+export function splitLeftover(amount: number, plans: readonly LeftoverPlan[], today: LocalDate): LeftoverSplit {
+  let rest = Math.floor(amount);
+  const out: LeftoverSplit['plans'] = [];
+  const open = plans.filter((p) => p.left >= 1);
+  const urgent = open
+    .filter((p) => p.first || diffDays(today, p.targetDate) <= SOON_DAYS)
+    .sort((a, b) => Number(!!b.first) - Number(!!a.first) || a.targetDate.localeCompare(b.targetDate));
+  for (const p of urgent) {
+    const give = Math.min(rest, Math.ceil(p.left));
+    if (give <= 0) continue;
+    out.push({ id: p.id, name: p.name, amount: give, why: p.first ? 'first' : 'soon' });
+    rest -= give;
+  }
+  const others = open.filter((p) => !urgent.includes(p));
+  const need = others.reduce((t, p) => t + p.left, 0);
+  const forPlans = others.length ? Math.min(Math.round(rest * (1 - SAVINGS_SHARE)), Math.ceil(need)) : 0;
+  let given = 0;
+  for (const p of others) {
+    const give = Math.min(Math.ceil(p.left), Math.floor((forPlans * p.left) / need));
+    if (give <= 0) continue;
+    out.push({ id: p.id, name: p.name, amount: give, why: 'share' });
+    given += give;
+  }
+  return { savings: rest - given, plans: out };
+}

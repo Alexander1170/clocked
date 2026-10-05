@@ -210,6 +210,20 @@ export interface Goal extends BaseRecord {
   targetDate: LocalDate;
   items: WishItem[];
   note?: string;
+  /** Money left over after a paycheck goes here first, for when you want it sooner. */
+  first?: boolean;
+}
+
+/** Money left over from a paycheck, and where you put it. */
+export interface Move extends BaseRecord {
+  /** The payday of the paycheck it was left over from. */
+  payday: LocalDate;
+  /** When you moved it. */
+  date: LocalDate;
+  amount: number;
+  /** Into savings, toward a plan on your wish list, or kept in checking. */
+  to: 'savings' | 'goal' | 'kept';
+  goalId?: string;
 }
 
 export interface Settings extends BaseRecord {
@@ -231,11 +245,12 @@ export interface CollectionMap {
   rules: Rule;
   savings: Saving;
   goals: Goal;
+  moves: Move;
 }
 
 export type CollectionName = keyof CollectionMap;
 
-export const COLLECTIONS: readonly CollectionName[] = ['jobs', 'overrides', 'gigs', 'transactions', 'categories', 'settings', 'bills', 'rules', 'savings', 'goals'];
+export const COLLECTIONS: readonly CollectionName[] = ['jobs', 'overrides', 'gigs', 'transactions', 'categories', 'settings', 'bills', 'rules', 'savings', 'goals', 'moves'];
 
 export interface Change {
   c: CollectionName;
