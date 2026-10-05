@@ -1,5 +1,5 @@
-import type { Bill, Category, GigSession, Job, LocalDate, Transaction } from '../../shared/types.ts';
-import { notCountedReason } from './money.ts';
+import type { Category, GigSession, Job, LocalDate, Transaction } from '../../shared/types.ts';
+import { notCountedReason, type Coverage } from './money.ts';
 import { hourlyChunks, valueIn, type Segment } from '../../shared/accrual.ts';
 import { dayEnd, dayStart, toLocalDate } from '../../shared/dates.ts';
 import { clock, hrs, timeRange } from './format.ts';
@@ -31,12 +31,12 @@ interface FeedInput {
   txs: Transaction[];
   jobs: Record<string, Job>;
   cats: Record<string, Category>;
-  bills: Record<string, Bill>;
+  cover: Coverage;
   now: number;
 }
 
 /** Everything that happened on one day, newest first: hourly deposits, gig pay, spending. */
-export function buildDayFeed({ date, segs, gigs, txs, jobs, cats, bills, now }: FeedInput): FeedItem[] {
+export function buildDayFeed({ date, segs, gigs, txs, jobs, cats, cover, now }: FeedInput): FeedItem[] {
   const d0 = dayStart(date);
   const d1 = dayEnd(date);
   const items: FeedItem[] = [];
@@ -100,7 +100,7 @@ export function buildDayFeed({ date, segs, gigs, txs, jobs, cats, bills, now }: 
     if (tx.deleted || tx.accountOff || tx.date !== date) continue;
     const cat = cats[tx.categoryId];
     const when = tx.at ? clock(tx.at) : tx.pending ? 'Pending' : '';
-    const muted = notCountedReason(tx, bills) ?? undefined;
+    const muted = notCountedReason(tx, cover) ?? undefined;
     items.push({
       key: tx.id,
       at: tx.at ?? d0,

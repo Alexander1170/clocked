@@ -57,7 +57,7 @@ export function saveWindow(bill: Bill, due: LocalDate): { from: LocalDate; to: L
 }
 
 /** Days in a window that carry a share: earning days, or every day if there are none. */
-function shareDays(from: LocalDate, to: LocalDate, isEarningDay: (d: LocalDate) => boolean): LocalDate[] {
+export function shareDays(from: LocalDate, to: LocalDate, isEarningDay: (d: LocalDate) => boolean): LocalDate[] {
   const all = eachDay(from, to);
   const working = all.filter(isEarningDay);
   return working.length ? working : all;

@@ -12,14 +12,18 @@ import { EndDashSheet, GigSheet, OrderSheet } from '../sheets/GigSheets.tsx';
 import { DaySheet } from '../sheets/DaySheet.tsx';
 import { JobSheet } from '../sheets/JobSheet.tsx';
 import { BillSheet } from '../sheets/BillSheet.tsx';
+import { SavingSheet } from '../sheets/SavingSheet.tsx';
+import { GoalSheet } from '../sheets/GoalSheet.tsx';
 import { SyncBadge } from './SyncBadge.tsx';
 
+/** The phone's bottom tabs. Jobs live in Settings on phones; they change rarely. */
 const NAV: Array<{ route: Route; label: string; icon: typeof House }> = [
   { route: 'today', label: 'Today', icon: House },
   { route: 'earnings', label: 'Earnings', icon: ChartColumn },
   { route: 'spending', label: 'Spending', icon: Receipt },
-  { route: 'jobs', label: 'Jobs', icon: Briefcase },
+  { route: 'plan', label: 'Plan', icon: PiggyBank },
 ];
+const SIDEBAR: typeof NAV = [...NAV, { route: 'jobs', label: 'Jobs', icon: Briefcase }, { route: 'settings', label: 'Settings', icon: Gear }];
 
 export function TabBar({ route }: { route: Route }) {
   const tab = ({ route: r, label, icon: Icon }: (typeof NAV)[number]) => (
@@ -63,7 +67,7 @@ export function Sidebar({ route }: { route: Route }) {
         <Plus size={18} /> Add
       </button>
       <nav className="mt-6 space-y-1">
-        {[...NAV.slice(0, 3), { route: 'bills' as Route, label: 'Bills', icon: PiggyBank }, ...NAV.slice(3), { route: 'settings' as Route, label: 'Settings', icon: Gear }].map(({ route: r, label, icon: Icon }) => (
+        {SIDEBAR.map(({ route: r, label, icon: Icon }) => (
           <button
             key={r}
             onClick={() => go(r)}
@@ -113,6 +117,12 @@ export function SheetHost() {
         break;
       case 'bill':
         content = <BillSheet id={top.id} fromTx={top.fromTx} />;
+        break;
+      case 'saving':
+        content = <SavingSheet id={top.id} />;
+        break;
+      case 'goal':
+        content = <GoalSheet id={top.id} type={top.type} />;
         break;
     }
   }

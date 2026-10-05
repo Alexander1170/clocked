@@ -10,7 +10,7 @@ import { Earnings } from './screens/Earnings.tsx';
 import { Spending } from './screens/Spending.tsx';
 import { Jobs } from './screens/Jobs.tsx';
 import { Settings } from './screens/Settings.tsx';
-import { Bills } from './screens/Bills.tsx';
+import { Plan } from './screens/Plan.tsx';
 import { Bank } from './screens/Bank.tsx';
 
 let booted = false;
@@ -42,7 +42,7 @@ export default function App() {
           {route === 'spending' && <Spending />}
           {route === 'jobs' && <Jobs />}
           {route === 'settings' && <Settings />}
-          {route === 'bills' && <Bills />}
+          {route === 'plan' && <Plan />}
           {route === 'bank' && <Bank />}
         </div>
       </main>

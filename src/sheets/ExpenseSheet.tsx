@@ -1,10 +1,10 @@
 import { useMemo, useState } from 'react';
 import clsx from 'clsx';
-import { Landmark, PiggyBank, Plus, Trash } from 'lucide-react';
+import { Gift, Landmark, PiggyBank, Plus, Trash } from 'lucide-react';
 import type { LocalDate, Rule, Transaction } from '../../shared/types.ts';
 import { at, hhmm, toLocalDate } from '../../shared/dates.ts';
 import { useData } from '../lib/store.ts';
-import { useBillMap, useBills, useCategories, useTransactions } from '../lib/hooks.ts';
+import { useBills, useCategories, useCoverage, useGoals, useTransactions } from '../lib/hooks.ts';
 import { categoryIcon, FALLBACK_CATEGORY } from '../lib/categories.ts';
 import { newId } from '../lib/ids.ts';
 import { dayLabel, minus, money, signed } from '../lib/format.ts';
@@ -22,7 +22,9 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
   const cats = useCategories();
   const txs = useTransactions();
   const bills = useBills();
-  const billMap = useBillMap();
+  const goals = useGoals().filter((g) => g.items.some((i) => !i.boughtOn) || g.id === existing?.goalId);
+  const cover = useCoverage();
+  const billMap = cover.bills;
   const today = toLocalDate(Date.now());
   const fromBank = existing?.source === 'plaid';
 
@@ -35,6 +37,7 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
   const [note, setNote] = useState(existing?.note ?? '');
   const [counted, setCounted] = useState(existing ? !existing.excluded && (existing.flow ?? 'spend') === 'spend' : true);
   const [billId, setBillId] = useState<string | undefined>(existing?.billId);
+  const [goalId, setGoalId] = useState<string | undefined>(existing?.goalId);
   const [always, setAlways] = useState(true);
   const [error, setError] = useState('');
 
@@ -78,11 +81,12 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
       categoryId: cat,
       note: note.trim() || undefined,
       billId,
+      goalId: billId ? undefined : goalId,
     };
     if (counted) {
       delete rec.excluded;
       rec.flow = 'spend';
-    } else if (!notCountedReason({ ...rec, excluded: undefined }, billMap)) {
+    } else if (!notCountedReason({ ...rec, excluded: undefined }, cover)) {
       rec.excluded = true;
     }
     // Bank updates keep what you changed here.
@@ -99,6 +103,7 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
   };
 
   const linked = billId ? billMap[billId] : undefined;
+  const linkedGoal = !linked && goalId ? cover.goals[goalId] : undefined;
   const isMoneyOut = existing ? existing.amount > 0 : direction === 'out';
 
   return (
@@ -199,7 +204,7 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
 
         {isMoneyOut && (
           <div>
-            <span className="label">Bill payment</span>
+            <span className="label">Paid for</span>
             {linked ? (
               <div className="flex items-center gap-3 rounded-2xl bg-raised px-4 py-3">
                 <PiggyBank size={18} className="shrink-0 text-ink-2" />
@@ -207,6 +212,16 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
                   Payment for <b className="font-semibold">{linked.name}</b>. {day >= linked.startDate ? 'Covered by its daily set-aside, so it isn’t spending today.' : 'Made before the set-asides started, so it still counts as spending.'}
                 </span>
                 <button className="text-[14px] font-semibold text-ink-2 hover:text-ink" onClick={() => setBillId(undefined)}>
+                  Unlink
+                </button>
+              </div>
+            ) : linkedGoal ? (
+              <div className="flex items-center gap-3 rounded-2xl bg-raised px-4 py-3">
+                <Gift size={18} className="shrink-0 text-ink-2" />
+                <span className="min-w-0 flex-1 text-[14px]">
+                  Bought from your <b className="font-semibold">{linkedGoal.name}</b> savings, so it isn’t spending today.
+                </span>
+                <button className="text-[14px] font-semibold text-ink-2 hover:text-ink" onClick={() => setGoalId(undefined)}>
                   Unlink
                 </button>
               </div>
@@ -219,6 +234,15 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
                     className="inline-flex h-9 items-center gap-1.5 rounded-full border border-line px-3 text-[14px] font-medium text-ink-2 transition-colors hover:text-ink"
                   >
                     <PiggyBank size={15} /> {b.name}
+                  </button>
+                ))}
+                {goals.map((g) => (
+                  <button
+                    key={g.id}
+                    onClick={() => setGoalId(g.id)}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-full border border-line px-3 text-[14px] font-medium text-ink-2 transition-colors hover:text-ink"
+                  >
+                    <Gift size={15} /> {g.name}
                   </button>
                 ))}
                 {existing && (
@@ -252,7 +276,7 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
           <span>
             <span className="block text-[15px] font-medium">Count as spending</span>
             <span className="block text-[13px] text-ink-2">
-              {existing && !counted ? (notCountedReason({ ...existing, billId }, billMap) ?? 'Left out of spending') : 'Turn off for transfers between your own accounts.'}
+              {existing && !counted ? (notCountedReason({ ...existing, billId, goalId }, cover) ?? 'Left out of spending') : 'Turn off for transfers between your own accounts.'}
             </span>
           </span>
           <Toggle checked={counted} onChange={setCounted} label="Count as spending" />

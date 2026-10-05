@@ -4,7 +4,7 @@ import { Bike, Briefcase, CalendarDays, ChevronRight, Plus, Settings as Gear, Sq
 import type { GigJob, GigSession, LocalDate, ScheduledJob } from '../../shared/types.ts';
 import { buildSegments, tally, type Segment } from '../../shared/accrual.ts';
 import { addDays, dayEnd, dayStart, toLocalDate } from '../../shared/dates.ts';
-import { useActiveDash, useBillMap, useBillPlan, useCategoryMap, useEngineData, useJobMap, useJobs, useNow, useSpendCheck, useTransactions, isGig, isScheduled } from '../lib/hooks.ts';
+import { useActiveDash, useCategoryMap, useCoverage, useEngineData, useJobMap, useJobs, useNow, useSetAsidePlan, useSpendCheck, useTransactions, isGig, isScheduled } from '../lib/hooks.ts';
 import { buildDayFeed } from '../lib/feed.ts';
 import { payInfo, spentBetween } from '../lib/money.ts';
 import { clockShort, dayLabel, dayLabelLong, daysUntil, hrs, minus, money, signed, stopwatch } from '../lib/format.ts';
@@ -152,23 +152,31 @@ export function Today() {
   const jobMap = useJobMap();
   const txs = useTransactions();
   const cats = useCategoryMap();
-  const billMap = useBillMap();
+  const cover = useCoverage();
   const counts = useSpendCheck();
-  const plan = useBillPlan(today, today);
+  const plan = useSetAsidePlan(today, today);
   const dash = useActiveDash();
 
   const segs = useMemo(() => buildSegments(data, today, today, now), [data, today, now]);
   const t = tally(segs, dayStart(today), dayEnd(today), now);
   const spent = spentBetween(txs, today, today, counts);
-  const bills = plan.byDay.get(today) ?? 0;
-  const left = t.value - spent - bills;
+  const setAside = plan.byDay.get(today) ?? 0;
+  const setAsideParts = (
+    [
+      ['Bills', plan.byKind.bills.get(today) ?? 0],
+      ['Savings', plan.byKind.savings.get(today) ?? 0],
+      ['Wish list', plan.byKind.goals.get(today) ?? 0],
+    ] as const
+  ).filter(([, v]) => v > 0.005);
+  const hasPlans = Object.keys(cover.bills).length + Object.keys(cover.goals).length > 0 || setAside > 0;
+  const left = t.value - spent - setAside;
   const perMin = ratePerMinute(segs, now);
   const scheduledToday = segs.filter((s) => s.kind !== 'gig' && s.end > dayStart(today) && s.start < dayEnd(today));
   const nextStart = scheduledToday.filter((s) => s.start > now).sort((a, b) => a.start - b.start)[0]?.start ?? null;
   const workedEarlier = scheduledToday.some((s) => s.end <= now);
   const feed = useMemo(
-    () => buildDayFeed({ date: today, segs, gigs: data.gigs, txs, jobs: jobMap, cats, bills: billMap, now }),
-    [today, segs, data.gigs, txs, jobMap, cats, billMap, now],
+    () => buildDayFeed({ date: today, segs, gigs: data.gigs, txs, jobs: jobMap, cats, cover, now }),
+    [today, segs, data.gigs, txs, jobMap, cats, cover, now],
   );
   const scheduled = jobs.filter(isScheduled);
   const gigJobs = jobs.filter(isGig);
@@ -264,11 +272,16 @@ export function Today() {
                   </span>
                   <span className="num font-semibold">{minus(spent)}</span>
                 </button>
-                <button onClick={() => go('bills')} className="flex w-full items-center justify-between px-4 py-3 text-left text-[15px] transition-colors hover:bg-hover">
-                  <span className="flex items-center gap-1 text-ink-2">
-                    Bills set aside <ChevronRight size={15} className="text-ink-3" />
+                <button onClick={() => go('plan')} className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-[15px] transition-colors hover:bg-hover">
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-1 text-ink-2">
+                      Set aside <ChevronRight size={15} className="text-ink-3" />
+                    </span>
+                    {setAsideParts.length > 0 && (
+                      <span className="num block truncate text-[12px] text-ink-3">{setAsideParts.map(([k, v]) => `${k} ${money(v)}`).join(' · ')}</span>
+                    )}
                   </span>
-                  <span className="num font-semibold">{bills > 0 ? minus(bills) : billMap && Object.keys(billMap).length ? '$0.00' : 'Add bills'}</span>
+                  <span className="num shrink-0 font-semibold">{setAside > 0 ? minus(setAside) : hasPlans ? '$0.00' : 'Add bills and goals'}</span>
                 </button>
               </div>
               <div className="flex items-center justify-between border-t border-line bg-raised/50 px-4 py-3.5">

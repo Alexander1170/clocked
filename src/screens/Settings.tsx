@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { ArrowLeft, ChevronRight, Download, Landmark, RefreshCw, Upload } from 'lucide-react';
+import { ArrowLeft, Briefcase, ChevronRight, Download, Landmark, RefreshCw, Upload } from 'lucide-react';
 import type { BaseRecord, Change, CollectionName } from '../../shared/types.ts';
 import { COLLECTIONS } from '../../shared/types.ts';
 import { useData } from '../lib/store.ts';
@@ -86,6 +86,16 @@ export function Settings() {
 
       <SectionTitle>Money</SectionTitle>
       <Card className="space-y-5 p-5">
+        <button onClick={() => go('jobs')} className="flex w-full items-center gap-3 text-left">
+          <span className="grid size-10 shrink-0 place-items-center rounded-full bg-raised">
+            <Briefcase size={19} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-semibold">Jobs</span>
+            <span className="block text-[13px] text-ink-2">Your pay, schedules, and gig work</span>
+          </span>
+          <ChevronRight size={18} className="text-ink-3" />
+        </button>
         <button onClick={() => go('bank')} className="flex w-full items-center gap-3 text-left">
           <span className="grid size-10 shrink-0 place-items-center rounded-full bg-raised">
             <Landmark size={19} />
@@ -97,9 +107,9 @@ export function Settings() {
           <ChevronRight size={18} className="text-ink-3" />
         </button>
         <div>
-          <span className="label">Spread bills over</span>
+          <span className="label">Spread set-asides over</span>
           <Segmented<'workdays' | 'everyday'>
-            label="Spread bills over"
+            label="Spread set-asides over"
             value={settings.billSpread ?? 'workdays'}
             onChange={(v) => put('settings', { ...settings, billSpread: v })}
             options={[
@@ -107,7 +117,7 @@ export function Settings() {
               { value: 'everyday', label: 'Every day' },
             ]}
           />
-          <p className="mt-1.5 text-[13px] text-ink-3">Days you're scheduled at a job, including paid days off.</p>
+          <p className="mt-1.5 text-[13px] text-ink-3">For bills, savings, and wish list. Days you work are days you're scheduled, including paid days off.</p>
         </div>
       </Card>
 

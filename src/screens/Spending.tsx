@@ -4,7 +4,7 @@ import { ChevronLeft, ChevronRight, CircleAlert, Landmark, PiggyBank, Plus, Rece
 import type { LocalDate, Transaction } from '../../shared/types.ts';
 import { buildSegments, tally } from '../../shared/accrual.ts';
 import { toLocalDate } from '../../shared/dates.ts';
-import { useBillMap, useBillPlan, useCategories, useCategoryMap, useEngineData, useNow, useSettings, useSpendCheck, useTransactions } from '../lib/hooks.ts';
+import { useBillMap, useCategories, useCategoryMap, useCoverage, useEngineData, useNow, useSetAsidePlan, useSettings, useSpendCheck, useTransactions } from '../lib/hooks.ts';
 import { bucketIndexAt, bucketsFor, periodBounds, periodTitle, shiftAnchor } from '../lib/periods.ts';
 import { categoryIcon } from '../lib/categories.ts';
 import { clock, dayLabel, minus, money, relativeDay, signed } from '../lib/format.ts';
@@ -21,9 +21,10 @@ type ChartMode = 'left' | 'spent';
 function TxRow({ tx }: { tx: Transaction }) {
   const cats = useCategoryMap();
   const bills = useBillMap();
+  const cover = useCoverage();
   const cat = cats[tx.categoryId];
   const Icon = categoryIcon(cat?.icon);
-  const reason = notCountedReason(tx, bills);
+  const reason = notCountedReason(tx, cover);
   const bill = tx.billId ? bills[tx.billId] : undefined;
   const sub = reason ?? [cat?.name ?? 'Other', bill && !bill.deleted ? `${bill.name} payment` : null, tx.at ? clock(tx.at) : null, tx.pending ? 'Pending' : null].filter(Boolean).join(' · ');
   return (
@@ -108,7 +109,7 @@ export function Spending() {
   const [picked, setPicked] = useState<{ key: string; i: number | null } | null>(null);
 
   const { from, to } = periodBounds(range, anchor, weekStartsOn);
-  const plan = useBillPlan(from, to);
+  const plan = useSetAsidePlan(from, to);
   const buckets = useMemo(() => bucketsFor(range, anchor, weekStartsOn), [range, anchor, weekStartsOn]);
   const nowIndex = bucketIndexAt(buckets, now);
   const windowKey = `${range}|${anchor}|${weekStartsOn}`;
@@ -140,7 +141,7 @@ export function Spending() {
       current: i === nowIndex,
       parts: [
         { id: 'spent', name: 'Spent', color: 'var(--s8)', value: Math.max(0, spentDays.get(b.date!) ?? 0) },
-        { id: 'bills', name: 'Bills', color: 'var(--s7)', value: future ? 0 : bill, projected: future ? bill : 0 },
+        { id: 'bills', name: 'Set aside', color: 'var(--s7)', value: future ? 0 : bill, projected: future ? bill : 0 },
       ],
     };
   });
@@ -179,8 +180,8 @@ export function Spending() {
       <header className="flex items-center justify-between gap-2 py-2">
         <h1 className="text-[28px] font-bold tracking-tight lg:text-[32px]">Spending</h1>
         <div className="flex gap-2">
-          <button className="btn btn-sm btn-secondary lg:hidden" onClick={() => go('bills')}>
-            <PiggyBank size={16} /> Bills
+          <button className="btn btn-sm btn-secondary lg:hidden" onClick={() => go('plan')}>
+            <PiggyBank size={16} /> Plan
           </button>
           <button className="btn btn-sm btn-primary" onClick={() => openSheet({ kind: 'expense', date: selDate ?? today })}>
             <Plus size={16} /> Expense
@@ -237,7 +238,7 @@ export function Spending() {
               {mode === 'left' ? signed(left) : money(spent)}
             </p>
             <p className="num mt-2.5 text-[14px] text-ink-2">
-              Earned {money(earned)} · spent {money(spent)} · bills {money(mode === 'left' ? billsSoFar : billsTotal)}
+              Earned {money(earned)} · spent {money(spent)} · set aside {money(mode === 'left' ? billsSoFar : billsTotal)}
             </p>
             {mode === 'spent' && (
               <div className="mt-3 flex gap-4 text-[13px] text-ink-2">
@@ -245,7 +246,7 @@ export function Spending() {
                   <span className="size-2.5 rounded-[3px] bg-[var(--s8)]" /> Spent
                 </span>
                 <span className="flex items-center gap-2">
-                  <span className="size-2.5 rounded-[3px] bg-[var(--s7)]" /> Bills set aside
+                  <span className="size-2.5 rounded-[3px] bg-[var(--s7)]" /> Set aside
                 </span>
               </div>
             )}
@@ -267,7 +268,7 @@ export function Spending() {
                   <p className="font-semibold">{money(selSpent)}</p>
                 </div>
                 <div>
-                  <p className="text-ink-2">Bills</p>
+                  <p className="text-ink-2">Set aside</p>
                   <p className="font-semibold">{money(selBills)}</p>
                 </div>
                 <div>
@@ -363,10 +364,10 @@ export function Spending() {
               </Chip>
             </div>
           )}
-          <button onClick={() => go('bills')} className="mt-3 hidden w-full items-center gap-3 rounded-3xl border border-line p-4 text-left transition-colors hover:bg-hover lg:flex">
+          <button onClick={() => go('plan')} className="mt-3 hidden w-full items-center gap-3 rounded-3xl border border-line p-4 text-left transition-colors hover:bg-hover lg:flex">
             <PiggyBank size={18} className="shrink-0 text-ink-2" />
             <span className="min-w-0 flex-1">
-              <span className="block text-[15px] font-semibold">Bills</span>
+              <span className="block text-[15px] font-semibold">Bills, savings, and wish list</span>
               <span className="block text-[13px] text-ink-2">{money(billsTotal)} set aside this {range}</span>
             </span>
             <ChevronRight size={18} className="shrink-0 text-ink-3" />

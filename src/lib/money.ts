@@ -1,4 +1,4 @@
-import type { Bill, LocalDate, ScheduledJob, Transaction } from '../../shared/types.ts';
+import type { Bill, Goal, LocalDate, ScheduledJob, Transaction } from '../../shared/types.ts';
 import { buildSegments, earnedBetween, valueIn, type EngineData } from '../../shared/accrual.ts';
 import { addDays, dayEnd, dayStart } from '../../shared/dates.ts';
 import { hourlyRate, nextPaydayOnOrAfter, periodForPayday, unpaidFrom, weeklyPaidHours } from '../../shared/pay.ts';
@@ -6,8 +6,14 @@ import { money } from './format.ts';
 
 export type SpendCheck = (tx: Transaction) => boolean;
 
+/** Bills and goals whose set-asides can cover a payment. */
+export interface Coverage {
+  bills: Record<string, Bill>;
+  goals: Record<string, Goal>;
+}
+
 /** Why a transaction isn't counted as spending, or null if it is. */
-export function notCountedReason(tx: Transaction, bills: Record<string, Bill>): string | null {
+export function notCountedReason(tx: Transaction, { bills, goals }: Coverage): string | null {
   if (tx.accountOff) return 'From an account you switched off';
   if (tx.excluded) return 'Left out of spending';
   if (tx.jobId) return 'Paycheck, already counted hourly';
@@ -18,6 +24,10 @@ export function notCountedReason(tx: Transaction, bills: Record<string, Bill>): 
     // Payments after the set-asides started are covered by them.
     if (b && !b.deleted && tx.date >= b.startDate) return `Covered by ${b.name} set-asides`;
   }
+  if (tx.goalId) {
+    const g = goals[tx.goalId];
+    if (g && !g.deleted) return `Paid from ${g.name} savings`;
+  }
   return null;
 }
 
@@ -25,8 +35,8 @@ export function notCountedReason(tx: Transaction, bills: Record<string, Bill>): 
  * Spending counts money out minus refunds. Income (already counted as pay), transfers,
  * and bill payments covered by daily set-asides are left out.
  */
-export function makeSpendCheck(bills: Record<string, Bill>): SpendCheck {
-  return (tx) => !tx.deleted && notCountedReason(tx, bills) === null;
+export function makeSpendCheck(cover: Coverage): SpendCheck {
+  return (tx) => !tx.deleted && notCountedReason(tx, cover) === null;
 }
 
 export function spentBetween(txs: Transaction[], from: LocalDate, to: LocalDate, counts: SpendCheck): number {

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Bike, Briefcase, CalendarCog, PiggyBank, Plus, Receipt, Square } from 'lucide-react';
+import { Bike, Briefcase, CalendarClock, CalendarCog, Gift, PiggyBank, Plus, Receipt, Square } from 'lucide-react';
 import { toLocalDate } from '../../shared/dates.ts';
 import { useData } from '../lib/store.ts';
 import { isGig, isScheduled, useActiveDash, useJobs } from '../lib/hooks.ts';
@@ -38,7 +38,9 @@ export function AddMenu() {
     <Sheet title="Add" onClose={closeSheet}>
       <div className="space-y-1">
         <Item icon={<Receipt size={20} />} title="Expense" sub="Something you spent money on" onClick={() => replace({ kind: 'expense' })} />
-        <Item icon={<PiggyBank size={20} />} title="Bill" sub="Split across your workdays until it's due" onClick={() => replace({ kind: 'bill' })} />
+        <Item icon={<CalendarClock size={20} />} title="Bill" sub="Split across your workdays until it's due" onClick={() => replace({ kind: 'bill' })} />
+        <Item icon={<PiggyBank size={20} />} title="Savings" sub="So much a week, month, or paycheck" onClick={() => replace({ kind: 'saving' })} />
+        <Item icon={<Gift size={20} />} title="Wish list" sub="Something you want, by a date you pick" onClick={() => replace({ kind: 'goal', type: 'item' })} />
         {dash ? (
           <>
             <Item icon={<Plus size={20} />} title="Order pay" sub="Add an order to the running dash" onClick={() => replace({ kind: 'order', id: dash.id })} />

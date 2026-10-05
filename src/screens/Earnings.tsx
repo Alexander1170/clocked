@@ -4,7 +4,7 @@ import { CalendarCog, ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import type { Job, LocalDate } from '../../shared/types.ts';
 import { buildSegments, tally, type Segment, type Tally } from '../../shared/accrual.ts';
 import { addDays, dayEnd, dayStart, endOfMonth, toLocalDate } from '../../shared/dates.ts';
-import { useBillPlan, useEngineData, useJobs, useNow, useSettings, useSpendCheck, useTransactions } from '../lib/hooks.ts';
+import { useEngineData, useJobs, useNow, useSetAsidePlan, useSettings, useSpendCheck, useTransactions } from '../lib/hooks.ts';
 import { bucketIndexAt, bucketsFor, periodBounds, periodTitle, shiftAnchor, type Bucket, type Range } from '../lib/periods.ts';
 import { slotColor } from '../lib/colors.ts';
 import { hrs, minus, money, moneyWhole, signed, timeRange } from '../lib/format.ts';
@@ -89,7 +89,7 @@ function DayDetail({ date, segs, jobs, now, spent, bills }: { date: LocalDate; s
     <div className="divide-y divide-line">
       {rows.length ? rows : <p className="py-4 text-[14px] text-ink-2">No work on this day.</p>}
       <Row title="Spent" sub="Manual and bank" amount={minus(spent)} />
-      <Row title="Bills set aside" amount={minus(bills)} />
+      <Row title="Set aside" sub="Bills, savings, and wish list" amount={minus(bills)} />
       <div className="flex items-center justify-between py-3 font-semibold">
         <span className="pl-[22px] text-[15px]">Left for the day</span>
         <span className={clsx('num text-[15px]', t.value - spent - bills >= 0 ? 'text-money' : 'text-spend')}>{signed(t.value - spent - bills)}</span>
@@ -117,7 +117,7 @@ function PeriodDetail({ bucket, segs, jobs, now, spent, bills }: { bucket: Bucke
           );
         })}
       <Row title="Spent" amount={minus(spent)} />
-      <Row title="Bills set aside" amount={minus(bills)} />
+      <Row title="Set aside" amount={minus(bills)} />
       <div className="flex items-center justify-between py-3 font-semibold">
         <span className="pl-[22px] text-[15px]">Left</span>
         <span className={clsx('num text-[15px]', t.value - spent - bills >= 0 ? 'text-money' : 'text-spend')}>{signed(t.value - spent - bills)}</span>
@@ -140,7 +140,7 @@ export function Earnings() {
   const [picked, setPicked] = useState<{ key: string; i: number } | null>(null);
 
   const { from, to } = periodBounds(range, anchor, weekStartsOn);
-  const plan = useBillPlan(from, to);
+  const plan = useSetAsidePlan(from, to);
   const buckets = useMemo(() => bucketsFor(range, anchor, weekStartsOn), [range, anchor, weekStartsOn]);
   const segs = useMemo(() => buildSegments(data, from, to, now), [data, from, to, now]);
   const jf = jobFilter === 'all' ? undefined : jobFilter;

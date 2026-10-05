@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Bill, Category, GigJob, Job, LocalDate, Rule, ScheduledJob, Settings } from '../../shared/types.ts';
-import { planBills, type BillPlan } from '../../shared/bills.ts';
-import { makeSpendCheck, type SpendCheck } from './money.ts';
+import type { Bill, Category, GigJob, Goal, Job, LocalDate, Rule, Saving, ScheduledJob, Settings } from '../../shared/types.ts';
+import { planSetAsides, type SetAsidePlan } from '../../shared/plan.ts';
+import { makeSpendCheck, type Coverage, type SpendCheck } from './money.ts';
 import type { EngineData } from '../../shared/accrual.ts';
 import { toLocalDate } from '../../shared/dates.ts';
 import { live, useData } from './store.ts';
@@ -96,16 +96,42 @@ export function useRules(): Rule[] {
   return useMemo(() => live(rules), [rules]);
 }
 
-/** Decides what counts as spending (see makeSpendCheck). */
-export function useSpendCheck(): SpendCheck {
-  const bills = useBillMap();
-  return useMemo(() => makeSpendCheck(bills), [bills]);
+export function useSavings(): Saving[] {
+  const savings = useData((s) => s.t.savings);
+  return useMemo(() => live(savings).sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0)), [savings]);
 }
 
-/** Each bill's daily set-aside over [from, to]. */
-export function useBillPlan(from: LocalDate, to: LocalDate): BillPlan {
+export function useGoalMap(): Record<string, Goal> {
+  return useData((s) => s.t.goals);
+}
+
+export function useGoals(): Goal[] {
+  const goals = useGoalMap();
+  return useMemo(() => live(goals).sort((a, b) => a.targetDate.localeCompare(b.targetDate)), [goals]);
+}
+
+/** Bills and goals that can cover a payment. */
+export function useCoverage(): Coverage {
+  const bills = useBillMap();
+  const goals = useGoalMap();
+  return useMemo(() => ({ bills, goals }), [bills, goals]);
+}
+
+/** Decides what counts as spending (see makeSpendCheck). */
+export function useSpendCheck(): SpendCheck {
+  const cover = useCoverage();
+  return useMemo(() => makeSpendCheck(cover), [cover]);
+}
+
+/** Every bill, saving plan, and goal's daily set-aside over [from, to]. */
+export function useSetAsidePlan(from: LocalDate, to: LocalDate): SetAsidePlan {
   const bills = useBills();
+  const savings = useSavings();
+  const goals = useGoals();
   const data = useEngineData();
   const { billSpread } = useSettings();
-  return useMemo(() => planBills(bills, data, from, to, billSpread ?? 'workdays'), [bills, data, from, to, billSpread]);
+  return useMemo(
+    () => planSetAsides({ bills, savings, goals }, data, from, to, billSpread ?? 'workdays'),
+    [bills, savings, goals, data, from, to, billSpread],
+  );
 }

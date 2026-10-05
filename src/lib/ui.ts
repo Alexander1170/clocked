@@ -12,7 +12,9 @@ export type SheetSpec =
   | { kind: 'endDash'; id: string }
   | { kind: 'day'; jobId: string; date: LocalDate }
   | { kind: 'job'; id?: string; type?: 'scheduled' | 'gig' }
-  | { kind: 'bill'; id?: string; fromTx?: string };
+  | { kind: 'bill'; id?: string; fromTx?: string }
+  | { kind: 'saving'; id?: string }
+  | { kind: 'goal'; id?: string; type?: 'item' | 'project' };
 
 export const useSheets = create<{
   stack: SheetSpec[];
@@ -94,11 +96,14 @@ export function initTheme() {
 
 // ---- Routing (hash based, works offline and in the installed app) ----------
 
-export type Route = 'today' | 'earnings' | 'spending' | 'jobs' | 'settings' | 'bills' | 'bank';
-const ROUTES: Route[] = ['today', 'earnings', 'spending', 'jobs', 'settings', 'bills', 'bank'];
+export type Route = 'today' | 'earnings' | 'spending' | 'jobs' | 'settings' | 'plan' | 'bank';
+const ROUTES: Route[] = ['today', 'earnings', 'spending', 'jobs', 'settings', 'plan', 'bank'];
+/** Older links still work. */
+const ALIASES: Record<string, Route> = { bills: 'plan' };
 
 function readRoute(): Route {
-  const r = location.hash.replace(/^#\/?/, '').split('?')[0] as Route;
+  const raw = location.hash.replace(/^#\/?/, '').split('?')[0];
+  const r = (ALIASES[raw] ?? raw) as Route;
   return ROUTES.includes(r) ? r : 'today';
 }
 

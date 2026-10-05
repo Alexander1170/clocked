@@ -111,6 +111,8 @@ export interface Transaction extends BaseRecord {
   flow?: TxFlow;
   /** A payment toward this bill. Covered by the bill's daily set-aside, so it isn't spending that day. */
   billId?: string;
+  /** A purchase from the wish list. Covered by the goal's daily set-aside. */
+  goalId?: string;
   /** The user changed this bank transaction, so later bank updates keep their category, note, and flags. */
   edited?: boolean;
   plaidId?: string;
@@ -158,6 +160,47 @@ export interface Bill extends BaseRecord {
   endDate?: LocalDate;
 }
 
+export type SavingFrequency = BillFrequency | 'paycheck';
+
+/** Money you put away regularly: so much a week, a month, or a paycheck, split across the days before it moves. */
+export interface Saving extends BaseRecord {
+  name: string;
+  /** Per period. */
+  amount: number;
+  frequency: SavingFrequency;
+  /** For 'paycheck': the job whose paydays end each period. */
+  jobId?: string;
+  /** Any day the money moves. Monthly and longer repeat on its day of the month. Unused for 'paycheck'. */
+  dueDate: LocalDate;
+  startDate: LocalDate;
+  endDate?: LocalDate;
+  /** Stop once this much has been set aside in total. */
+  target?: number;
+  /** Where the money goes, e.g. "Savings ••9017". */
+  account?: string;
+}
+
+export interface WishItem {
+  id: string;
+  name: string;
+  price: number;
+  url?: string;
+  note?: string;
+  /** Set-asides for this item start this day. */
+  addedOn: LocalDate;
+  boughtOn?: LocalDate;
+}
+
+/** Something to buy by a date: one wish-list item, or a project with several. */
+export interface Goal extends BaseRecord {
+  kind: 'item' | 'project';
+  name: string;
+  /** When you want it. Each item is split across the days from when it was added until this date. */
+  targetDate: LocalDate;
+  items: WishItem[];
+  note?: string;
+}
+
 export interface Settings extends BaseRecord {
   weekStartsOn: 0 | 1;
   /** Spread bills over the days you're scheduled to work, or over every day. */
@@ -173,11 +216,13 @@ export interface CollectionMap {
   settings: Settings;
   bills: Bill;
   rules: Rule;
+  savings: Saving;
+  goals: Goal;
 }
 
 export type CollectionName = keyof CollectionMap;
 
-export const COLLECTIONS: readonly CollectionName[] = ['jobs', 'overrides', 'gigs', 'transactions', 'categories', 'settings', 'bills', 'rules'];
+export const COLLECTIONS: readonly CollectionName[] = ['jobs', 'overrides', 'gigs', 'transactions', 'categories', 'settings', 'bills', 'rules', 'savings', 'goals'];
 
 export interface Change {
   c: CollectionName;
