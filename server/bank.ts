@@ -79,6 +79,17 @@ export class BankError extends Error {
 const accountLabel = (a: AccountInfo) => `${a.name}${a.mask ? ` ••${a.mask}` : ''}`;
 const includedByDefault = (a: PlaidAccount) => a.type === 'depository' || a.type === 'credit';
 
+/** Plaid's account, keeping the on/off switch it already had. */
+const accountInfo = (a: PlaidAccount, prev: AccountInfo[]): AccountInfo => ({
+  id: a.account_id,
+  name: a.name,
+  mask: a.mask ?? null,
+  type: a.type,
+  subtype: a.subtype ?? null,
+  balance: a.balances?.current ?? null,
+  included: prev.find((p) => p.id === a.account_id)?.included ?? includedByDefault(a),
+});
+
 function describe(e: unknown): { status: ItemState; message: string } {
   if (e instanceof PlaidError) {
     if (e.code === 'ITEM_LOGIN_REQUIRED' || e.code === 'PENDING_EXPIRATION' || e.code === 'PENDING_DISCONNECT')
@@ -214,17 +225,7 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
       const prevAccounts = JSON.parse(item.accounts) as AccountInfo[];
       // Balances only move when transactions do, so skip the extra call on quiet checks.
       if (!accounts && (!prevAccounts.length || added.length || modified.length || removed.length)) accounts = await c.accounts(item.access_token);
-      const accountInfos: AccountInfo[] = !accounts
-        ? prevAccounts
-        : accounts.map((a) => ({
-            id: a.account_id,
-            name: a.name,
-            mask: a.mask ?? null,
-            type: a.type,
-            subtype: a.subtype ?? null,
-            balance: a.balances?.current ?? null,
-            included: prevAccounts.find((p) => p.id === a.account_id)?.included ?? includedByDefault(a),
-          }));
+      const accountInfos: AccountInfo[] = accounts ? accounts.map((a) => accountInfo(a, prevAccounts)) : prevAccounts;
       const byAccount = new Map(accountInfos.map((a) => [a.id, a]));
 
       const rules = store.all('rules');
@@ -380,7 +381,17 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
     connectSandbox: async () => addItem('sandbox', await client('sandbox').sandboxPublicToken(SANDBOX_INSTITUTION), 'First Platypus Bank (test)'),
     /** After fixing a login in Link, clear the error and pull new data. */
     reconnected: async (itemId: string) => {
+      const item = row(itemId);
+      if (!item) return;
       update(itemId, { status: 'ok', error: null });
+      // The bank may share different accounts now.
+      try {
+        const prev = JSON.parse(item.accounts) as AccountInfo[];
+        const accounts = await client(item.env).accounts(item.access_token);
+        update(itemId, { accounts: JSON.stringify(accounts.map((a) => accountInfo(a, prev))) });
+      } catch (e) {
+        log(`account refresh after reconnect failed: ${describe(e).message}`);
+      }
       await syncItem(itemId);
     },
     /** Sync every hour; ask banks for fresh data every 6 hours. */
