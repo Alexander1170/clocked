@@ -5,9 +5,9 @@ import { makeSpendCheck, type Coverage, type SpendCheck } from './money.ts';
 import type { EngineData } from '../../shared/accrual.ts';
 import { addDays, toLocalDate } from '../../shared/dates.ts';
 import { upcomingPaychecks } from '../../shared/bills.ts';
-import { lastPaydayOnOrBefore, nextPaydayOnOrAfter } from '../../shared/pay.ts';
+import { lastPaydayOnOrBefore, nextPaydayOnOrAfter, paydaysBetween } from '../../shared/pay.ts';
 import { checkAmount, spentBetween } from './money.ts';
-import { gigPayBetween, setAsideBetween, untilPayday, type UntilPayday } from './insights.ts';
+import { gigPayBetween, setAsideBetween, stretchEndings, untilPayday, type UntilPayday } from './insights.ts';
 import { live, useData } from './store.ts';
 import { FALLBACK_CATEGORY } from './categories.ts';
 
@@ -159,12 +159,18 @@ export interface PaydayStretch extends UntilPayday {
   saving: number;
   gig: number;
   spent: number;
+  /** How the paycheck before ended, when you were tracking spending then. */
+  lastEnd: number | null;
 }
+
+/** How far back a shortfall can carry from. Older ones are forgiven. */
+const CARRY_DAYS = 92;
 
 /**
  * Money free from your last paycheck until the next one, for your main job:
  * the check, less the bills paid from it and the savings planned until
- * payday, plus gig pay, minus what you've spent since.
+ * payday, plus gig pay, minus what you've spent since. If an earlier
+ * paycheck ran short, that comes off too, so it gets made up.
  */
 export function useUntilPayday(now: number): PaydayStretch | null {
   const today = toLocalDate(now);
@@ -176,15 +182,35 @@ export function useUntilPayday(now: number): PaydayStretch | null {
   const job = jobs.find((j): j is ScheduledJob => isScheduled(j) && j.takeHome > 0);
   const lastPayday = job ? lastPaydayOnOrBefore(job, today) : null;
   const nextPayday = job ? nextPaydayOnOrAfter(job, addDays(today, 1)) : null;
-  const plan = useSetAsidePlan(lastPayday ?? today, nextPayday ? addDays(nextPayday, -1) : today);
+  const paydays = useMemo(() => (job && lastPayday ? paydaysBetween(job, addDays(lastPayday, -CARRY_DAYS), lastPayday) : []), [job, lastPayday]);
+  const plan = useSetAsidePlan(paydays[0] ?? today, nextPayday ? addDays(nextPayday, -1) : today);
   return useMemo(() => {
     if (!job || !lastPayday || !nextPayday) return null;
-    const check = checkAmount(job, data, lastPayday, now);
-    // Bills paid from that check count even if they came before you started tracking them.
-    const paid = upcomingPaychecks(job, bills, data.jobs, lastPayday, 1, true)[0]?.billTotal ?? 0;
-    const saving = setAsideBetween(plan, lastPayday, addDays(nextPayday, -1));
-    const gig = gigPayBetween(data.gigs, lastPayday, today, now);
-    const spent = spentBetween(txs, lastPayday, today, counts);
-    return { job, lastPayday, nextPayday, check, bills: paid, saving, gig, spent, ...untilPayday({ check, bills: paid, saving, gig, spent, today, nextPayday }) };
-  }, [job, lastPayday, nextPayday, data, now, bills, plan, txs, counts, today]);
+    // Bills paid from a check count even if they came before you started tracking them.
+    const stretch = (payday: LocalDate, end: LocalDate, through: LocalDate) => {
+      const check = checkAmount(job, data, payday, now);
+      const paid = upcomingPaychecks(job, bills, data.jobs, payday, 1, true)[0]?.billTotal ?? 0;
+      const saving = setAsideBetween(plan, payday, end);
+      return { check, bills: paid, saving, start: check - paid - saving, gig: gigPayBetween(data.gigs, payday, through, now), spent: spentBetween(txs, payday, through, counts) };
+    };
+    // Earlier stretches, oldest first, to see whether one ran short.
+    const past = paydays.slice(0, -1).map((p, i) => stretch(p, addDays(paydays[i + 1], -1), addDays(paydays[i + 1], -1)));
+    const endings = stretchEndings(past);
+    const before = past[past.length - 1];
+    const carry = endings.length ? Math.min(0, endings[endings.length - 1].end) : 0;
+    const cur = stretch(lastPayday, addDays(nextPayday, -1), today);
+    return {
+      job,
+      lastPayday,
+      nextPayday,
+      check: cur.check,
+      bills: cur.bills,
+      saving: cur.saving,
+      gig: cur.gig,
+      spent: cur.spent,
+      // Without spending tracked then, how it ended doesn't mean much.
+      lastEnd: before && before.spent > 0.005 ? endings[endings.length - 1].end : null,
+      ...untilPayday({ ...cur, today, nextPayday, carry }),
+    };
+  }, [job, lastPayday, nextPayday, paydays, data, now, bills, plan, txs, counts, today]);
 }

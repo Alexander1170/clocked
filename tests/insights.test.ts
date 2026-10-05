@@ -12,6 +12,7 @@ import {
   monthSplit,
   saveIdea,
   setAsideBetween,
+  stretchEndings,
   untilPayday,
 } from '../src/lib/insights.ts';
 
@@ -77,7 +78,29 @@ describe('saving more', () => {
 describe('until payday', () => {
   it('takes the check, less bills, savings, and spending, plus gig pay, over the days left', () => {
     const u = untilPayday({ check: 2000, bills: 1200, saving: 100, gig: 50, spent: 250, today: '2026-10-05', nextPayday: '2026-10-13' });
-    expect(u).toEqual({ start: 700, free: 500, daysLeft: 8, perDay: 62.5 });
+    expect(u).toEqual({ start: 700, free: 500, daysLeft: 8, perDay: 62.5, carry: 0 });
+  });
+
+  it('makes up a paycheck that ran short from the next one', () => {
+    const u = untilPayday({ check: 2000, bills: 1200, saving: 0, gig: 0, spent: 0, today: '2026-10-13', nextPayday: '2026-10-27', carry: -140 });
+    expect(u).toMatchObject({ start: 800, carry: -140, free: 660, perDay: 660 / 14 });
+    // Money to spare doesn't carry: it's better saved than spent.
+    expect(untilPayday({ check: 2000, bills: 1200, saving: 0, gig: 0, spent: 0, today: '2026-10-13', nextPayday: '2026-10-27', carry: 90 }).free).toBe(800);
+  });
+
+  it('carries a shortfall until it is made up', () => {
+    const endings = stretchEndings([
+      { start: 500, gig: 0, spent: 650 },
+      { start: 500, gig: 20, spent: 300 },
+      { start: 500, gig: 0, spent: 600 },
+      { start: 500, gig: 0, spent: 100 },
+    ]);
+    expect(endings).toEqual([
+      { carry: 0, end: -150 },
+      { carry: -150, end: 70 },
+      { carry: 0, end: -100 },
+      { carry: -100, end: 300 },
+    ]);
   });
 
   it('adds up savings set-asides and gig pay in the stretch', () => {

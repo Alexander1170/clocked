@@ -93,21 +93,55 @@ export function saveIdea(o: {
 }
 
 export interface UntilPayday {
-  /** What's left of the last check after its bills and savings, plus gig pay, minus spending. */
+  /** What's left of the last check after its bills and savings, plus gig pay, minus spending and any shortfall. */
   free: number;
   /** Days from today through the day before payday. */
   daysLeft: number;
   perDay: number;
   /** What the stretch started with: the check, less its bills and savings. */
   start: number;
+  /** How far short the last paycheck ran, made up from this one (zero or less). */
+  carry: number;
 }
 
 /** Money free from your last paycheck until the next one. */
-export function untilPayday(o: { check: number; bills: number; saving: number; gig: number; spent: number; today: LocalDate; nextPayday: LocalDate }): UntilPayday {
+export function untilPayday(o: {
+  check: number;
+  bills: number;
+  saving: number;
+  gig: number;
+  spent: number;
+  today: LocalDate;
+  nextPayday: LocalDate;
+  carry?: number;
+}): UntilPayday {
   const start = o.check - o.bills - o.saving;
-  const free = start + o.gig - o.spent;
+  const carry = Math.min(0, o.carry ?? 0);
+  const free = start + carry + o.gig - o.spent;
   const daysLeft = Math.max(1, diffDays(o.today, o.nextPayday));
-  return { free, daysLeft, perDay: free / daysLeft, start };
+  return { free, daysLeft, perDay: free / daysLeft, start, carry };
+}
+
+export interface StretchTotals {
+  /** The check, less its bills and savings. */
+  start: number;
+  gig: number;
+  spent: number;
+}
+
+/**
+ * How each paycheck stretch ended, oldest first, and what it carried in.
+ * Running short carries into the next stretch so it gets made up. Money to
+ * spare doesn't: it's better off saved than spent.
+ */
+export function stretchEndings(stretches: readonly StretchTotals[]): Array<{ carry: number; end: number }> {
+  let carry = 0;
+  return stretches.map((s) => {
+    const end = s.start + carry + s.gig - s.spent;
+    const out = { carry, end };
+    carry = Math.min(0, end);
+    return out;
+  });
 }
 
 /** Where a month's pay goes. `free` is what's not spent or spoken for; `over` is how far past the pay it went. */

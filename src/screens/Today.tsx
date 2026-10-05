@@ -322,7 +322,11 @@ export function Today() {
                   <span className="block text-[13px] font-medium text-ink-2">Free until payday · {dayLabel(stretch.nextPayday)}</span>
                   <span className={clsx('num mt-1 block text-[24px] font-bold tracking-tight', stretch.free < 0 && 'text-spend')}>{money(stretch.free)}</span>
                   <span className="num block text-[13px] text-ink-2">
-                    {stretch.free >= 0 ? `About ${money(stretch.perDay)} a day · see insights` : 'More than this check had. Go easy until payday.'}
+                    {stretch.free < 0
+                      ? 'More than this check had. Go easy until payday.'
+                      : stretch.carry < -0.005
+                        ? `About ${money(stretch.perDay)} a day · making up ${money(-stretch.carry)} from last paycheck`
+                        : `About ${money(stretch.perDay)} a day · see insights`}
                   </span>
                 </span>
                 <ChevronRight size={18} className="shrink-0 text-ink-3" />
