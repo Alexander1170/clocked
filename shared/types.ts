@@ -158,7 +158,18 @@ export interface Bill extends BaseRecord {
   startDate: LocalDate;
   /** Last day to set aside. Payments due after it are dropped. */
   endDate?: LocalDate;
+  /**
+   * The paycheck that pays it: the one on or right before the 1st ('end'), or
+   * the one after that ('mid'). Unset means it's paid on its due date.
+   */
+  payFrom?: BillPaycheck;
+  /** Days past the due date that are fine, so a paycheck in that stretch can still pay it. */
+  lateDays?: number;
+  /** Whose paychecks. The first scheduled job when unset. */
+  jobId?: string;
 }
+
+export type BillPaycheck = 'end' | 'mid';
 
 export type SavingFrequency = BillFrequency | 'paycheck';
 

@@ -1,5 +1,5 @@
 import type { LocalDate, PayFrequency, ScheduledJob, Shift } from './types.ts';
-import { addDays, daysInMonth, diffDays, makeDate, minutesOf, weekday, ymd } from './dates.ts';
+import { addDays, addMonths, daysInMonth, diffDays, makeDate, minutesOf, startOfMonth, weekday, ymd } from './dates.ts';
 
 export const CHECKS_PER_YEAR: Record<PayFrequency, number> = {
   weekly: 52,
@@ -87,6 +87,24 @@ export function lastPaydayOnOrBefore(job: PayJob, d: LocalDate): LocalDate | nul
 
 export function nextPaydayOnOrAfter(job: PayJob, d: LocalDate): LocalDate | null {
   return paydaysBetween(job, d, addDays(d, 70))[0] ?? null;
+}
+
+export type PaycheckSlot = 'end' | 'mid' | 'extra';
+
+/** The 1st of the month on or after a day. */
+const firstOnOrAfter = (d: LocalDate): LocalDate => (d.endsWith('-01') ? d : startOfMonth(addMonths(d, 1)));
+
+const isEndOfMonthCheck = (job: PayJob, payday: LocalDate) => lastPaydayOnOrBefore(job, firstOnOrAfter(payday)) === payday;
+
+/**
+ * Which paycheck of the month a payday is. The one on or right before the 1st
+ * pays what's due as the month turns over, like rent ('end'), and the next one
+ * is 'mid'. Paid every two weeks, about two paydays a year are neither.
+ */
+export function paycheckSlot(job: PayJob, payday: LocalDate): PaycheckSlot {
+  if (isEndOfMonthCheck(job, payday)) return 'end';
+  const prev = lastPaydayOnOrBefore(job, addDays(payday, -1));
+  return prev && isEndOfMonthCheck(job, prev) ? 'mid' : 'extra';
 }
 
 /** The days of work a payday's check covers, inclusive. */

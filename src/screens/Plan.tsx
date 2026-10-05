@@ -2,15 +2,17 @@ import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { CalendarClock, ChevronRight, Gift, Package, PiggyBank, Plus } from 'lucide-react';
 import type { Bill, BillFrequency, Goal, Saving, SavingFrequency } from '../../shared/types.ts';
-import { billStatus, earningDays } from '../../shared/bills.ts';
+import { billStatus, earningDays, upcomingPaychecks, type BillStatus } from '../../shared/bills.ts';
 import { goalStatus, savingStatus } from '../../shared/plan.ts';
-import { addDays, toLocalDate } from '../../shared/dates.ts';
+import { addDays, diffDays, toLocalDate } from '../../shared/dates.ts';
 import {
+  isScheduled,
   useBills,
   useCategoryMap,
   useEngineData,
   useGoals,
   useJobMap,
+  useJobs,
   useNow,
   useSavings,
   useSetAsidePlan,
@@ -19,8 +21,10 @@ import {
 } from '../lib/hooks.ts';
 import { categoryIcon } from '../lib/categories.ts';
 import { dayLabel, daysUntil, money } from '../lib/format.ts';
+import { checkAmount } from '../lib/money.ts';
 import { openSheet } from '../lib/ui.ts';
 import { Card, EmptyState, Segmented } from '../components/ui.tsx';
+import { PaycheckCard, shortDay } from '../components/PaycheckCard.tsx';
 
 type Tab = 'bills' | 'savings' | 'wish';
 const TAB_KEY = 'clocked.planTab';
@@ -50,6 +54,13 @@ function Progress({ value, of, color = 'var(--s7)' }: { value: number; of: numbe
       <span className="block h-full rounded-full transition-[width] duration-500" style={{ width: `${of > 0 ? Math.min(100, (value / of) * 100) : 0}%`, background: color }} />
     </span>
   );
+}
+
+/** "due Oct 22, in 17 days", or for a bill paid from a paycheck, "pays Oct 27 · due Oct 22". */
+function whenText(s: BillStatus, today: string): string {
+  if (s.pay === s.due) return `due ${dayLabel(s.due)}, ${daysUntil(s.due, today)}`;
+  const late = diffDays(s.due, s.pay);
+  return `pays ${shortDay(s.pay)} · due ${shortDay(s.due)}${late > 0 ? `, ${late} ${late === 1 ? 'day' : 'days'} late` : ''}`;
 }
 
 function Row({ icon, title, amount, sub, children, onClick }: { icon: React.ReactNode; title: string; amount: string; sub: React.ReactNode; children?: React.ReactNode; onClick(): void }) {
@@ -107,9 +118,16 @@ export function Plan() {
   };
 
   const billRows = bills
-    .map((b) => ({ bill: b, status: billStatus(b, today, isEarningDay), last: lastPayment(b) }))
-    .sort((a, b) => (a.status?.due ?? '9999').localeCompare(b.status?.due ?? '9999'));
+    .map((b) => ({ bill: b, status: billStatus(b, today, isEarningDay, data.jobs), last: lastPayment(b) }))
+    .sort((a, b) => (a.status?.pay ?? '9999').localeCompare(b.status?.pay ?? '9999') || (a.status?.due ?? '').localeCompare(b.status?.due ?? ''));
   const perMonth = bills.reduce((t, b) => t + b.amount * PER_MONTH[b.frequency], 0);
+
+  // The bills each upcoming paycheck pays, for your main job.
+  const payJob = useJobs().filter(isScheduled).find((j) => j.takeHome > 0);
+  const checks = useMemo(
+    () => (payJob && bills.length ? upcomingPaychecks(payJob, bills, data.jobs, today, 3).map((c) => ({ check: c, amount: checkAmount(payJob, data, c.payday, now) })) : []),
+    [payJob, bills, data, today, now],
+  );
 
   const goalRows = goals.map((g) => ({ goal: g, status: goalStatus(g, today, isEarningDay) }));
   const activeGoals = goalRows.filter((r) => !r.status.done);
@@ -177,6 +195,17 @@ export function Plan() {
             </Card>
           ) : (
             <>
+              {checks.length > 0 && (
+                <>
+                  <h2 className="px-1 pt-1 text-[15px] font-semibold">Next paychecks</h2>
+                  <div className="grid gap-3 lg:grid-cols-3">
+                    {checks.map(({ check, amount }) => (
+                      <PaycheckCard key={check.payday} check={check} amount={amount} today={today} txs={txs} />
+                    ))}
+                  </div>
+                  <h2 className="px-1 pt-4 text-[15px] font-semibold">All bills</h2>
+                </>
+              )}
               <p className="px-1 text-[13px] text-ink-2">
                 <span className="num font-semibold text-ink">{money(perMonth)}</span> a month in bills
               </p>
@@ -192,14 +221,16 @@ export function Plan() {
                     sub={
                       <>
                         <CalendarClock size={14} className="shrink-0" />
-                        {OFTEN[bill.frequency]}
-                        {status && ` · due ${dayLabel(status.due)}, ${daysUntil(status.due, today)}`}
+                        <span className="truncate">
+                          {OFTEN[bill.frequency]}
+                          {status && ` · ${whenText(status, today)}`}
+                        </span>
                       </>
                     }
                   >
                     {status && (
                       <>
-                        <Progress value={status.savedSoFar} of={bill.amount} />
+                        <Progress value={status.savedSoFar} of={status.amount} />
                         <span className="num mt-2 flex justify-between gap-2 text-[13px] text-ink-2">
                           <span>{money(status.savedSoFar)} saved</span>
                           <span className="font-semibold text-ink">

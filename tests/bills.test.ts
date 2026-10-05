@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Bill, DayOverride, ScheduledJob, Shift } from '../shared/types.ts';
-import { billShares, billStatus, dueDatesBetween, earningDays, planBills, saveWindow } from '../shared/bills.ts';
+import { billShares, billStatus, dueDatesBetween, earningDays, payDateFor, planBills, saveWindow, upcomingPaychecks } from '../shared/bills.ts';
+import { paycheckSlot } from '../shared/pay.ts';
 
 const nineToFive: Shift = { start: '08:00', end: '17:00', breakMinutes: 60, breakStart: '12:00' };
 const dayJob: ScheduledJob = {
@@ -107,5 +108,62 @@ describe('bill status', () => {
     const s = billStatus(bill({ startDate: '2026-10-16' }), '2026-10-12', workdays)!;
     expect(s.due).toBe('2026-11-15');
     expect(s.savedSoFar).toBe(0);
+  });
+});
+
+describe('bills paid from a paycheck', () => {
+  // Every other Friday, each check covering work through payday.
+  const fridays: ScheduledJob = { ...dayJob, id: 'fridays', payday: '2026-10-16', payLagDays: 0 };
+  const jobs = [fridays];
+  const everyDay = () => true;
+  const rent = bill({ id: 'rent', name: 'Rent', amount: 1000, dueDate: '2026-11-01', startDate: '2026-10-03', payFrom: 'end' });
+  const internet = bill({ id: 'net', name: 'Internet', amount: 80, dueDate: '2026-10-22', startDate: '2026-09-22', payFrom: 'end', lateDays: 10 });
+  const phone = bill({ id: 'phone', name: 'Phone', amount: 60, dueDate: '2026-10-09', startDate: '2026-09-01', payFrom: 'mid', lateDays: 7 });
+  const power = bill({ id: 'power', name: 'Power', amount: 150, dueDate: '2026-10-15', startDate: '2026-09-15', payFrom: 'mid' });
+  const music = bill({ id: 'music', name: 'Music', amount: 12, dueDate: '2026-10-05', startDate: '2026-09-05' });
+
+  it('tells the paycheck before the 1st from the one after it, and the extra ones', () => {
+    expect(['2026-09-18', '2026-10-02', '2026-10-16', '2026-10-30', '2026-11-13'].map((d) => paycheckSlot(fridays, d))).toEqual(['end', 'mid', 'extra', 'end', 'mid']);
+  });
+
+  it('pays on the last paycheck of its kind before the due date, or within the late days', () => {
+    expect(payDateFor(rent, '2026-11-01', jobs)).toBe('2026-10-30');
+    expect(payDateFor(rent, '2026-12-01', jobs)).toBe('2026-11-27');
+    expect(payDateFor(internet, '2026-10-22', jobs)).toBe('2026-10-30');
+    expect(payDateFor({ ...internet, lateDays: 0 }, '2026-10-22', jobs)).toBe('2026-09-18');
+    expect(payDateFor(phone, '2026-11-09', jobs)).toBe('2026-11-13');
+    expect(payDateFor(phone, '2026-12-09', jobs)).toBe('2026-12-11');
+    expect(payDateFor(power, '2026-11-15', jobs)).toBe('2026-11-13');
+    expect(payDateFor(music, '2026-11-05', jobs)).toBe('2026-11-05');
+  });
+
+  it('has the money set aside by the payday, not the due date', () => {
+    const shares = billShares(rent, '2026-10-01', '2026-11-27', everyDay, jobs);
+    expect(shares.get('2026-10-03')).toBeCloseTo(1000 / 28, 6);
+    expect(shares.get('2026-10-30')).toBeCloseTo(1000 / 28, 6);
+    expect(shares.get('2026-10-31')).toBeCloseTo(1000 / 28, 6);
+    expect(sum(shares)).toBeCloseTo(2000, 6);
+    const s = billStatus(rent, '2026-10-30', everyDay, jobs)!;
+    expect(s).toMatchObject({ due: '2026-11-01', pay: '2026-10-30', daysLeft: 0 });
+    expect(s.savedSoFar).toBeCloseTo(1000, 6);
+  });
+
+  it('saves for two payments at once when one paycheck pays both', () => {
+    const early = { ...phone, lateDays: 0 };
+    expect(payDateFor(early, '2026-10-09', jobs)).toBe('2026-10-02');
+    expect(payDateFor(early, '2026-11-09', jobs)).toBe('2026-10-02');
+    const s = billStatus(early, '2026-09-20', everyDay, jobs)!;
+    expect(s).toMatchObject({ pay: '2026-10-02', amount: 120 });
+    const next = billStatus(early, '2026-10-03', everyDay, jobs)!;
+    expect(next).toMatchObject({ pay: '2026-11-13', amount: 60, windowFrom: '2026-10-03', days: 42 });
+  });
+
+  it('lists what each paycheck pays', () => {
+    const checks = upcomingPaychecks(fridays, [rent, internet, phone, power, music], jobs, '2026-10-20', 3);
+    expect(checks.map((c) => [c.payday, c.slot, c.bills.map((b) => b.bill.id), c.billTotal])).toEqual([
+      ['2026-10-30', 'end', ['net', 'rent', 'music'], 1092],
+      ['2026-11-13', 'mid', ['phone', 'power'], 210],
+      ['2026-11-27', 'end', ['net', 'rent', 'music'], 1092],
+    ]);
   });
 });

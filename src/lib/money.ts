@@ -135,14 +135,18 @@ export function payInfo(job: ScheduledJob, data: EngineData, today: LocalDate, n
   const from = unpaidFrom(job, today);
   const pending = earnedBetween(buildSegments(only, from, today, now), dayStart(from), dayEnd(today), now);
   const nextPayday = nextPaydayOnOrAfter(job, addDays(today, 1));
-  let nextAmount = 0;
-  if (nextPayday) {
-    const p = periodForPayday(job, nextPayday);
-    const a = dayStart(p.from);
-    const b = dayEnd(p.to);
-    for (const s of buildSegments(only, p.from, p.to, now)) nextAmount += valueIn(s, a, b);
-  }
-  return { job, pending, unpaidFrom: from, nextPayday, nextAmount };
+  return { job, pending, unpaidFrom: from, nextPayday, nextAmount: nextPayday ? checkAmount(job, data, nextPayday, now) : 0 };
+}
+
+/** What a payday's check comes to, per the schedule, days off included. */
+export function checkAmount(job: ScheduledJob, data: EngineData, payday: LocalDate, now: number): number {
+  const only = { jobs: [job], overrides: data.overrides, gigs: [] };
+  const p = periodForPayday(job, payday);
+  const a = dayStart(p.from);
+  const b = dayEnd(p.to);
+  let total = 0;
+  for (const seg of buildSegments(only, p.from, p.to, now)) total += valueIn(seg, a, b);
+  return total;
 }
 
 export interface RateSummary {

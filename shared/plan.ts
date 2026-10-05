@@ -174,7 +174,7 @@ export function planSetAsides(input: SetAsides, data: EngineData, from: LocalDat
     if (w.from < lo) lo = w.from;
     if (w.to > hi) hi = w.to;
   };
-  for (const b of input.bills) windowsTouching(b, from, to).forEach(widen);
+  for (const b of input.bills) windowsTouching(b, from, to, data.jobs).forEach(widen);
   for (const s of input.savings) savingWindowsFor(s, from, to, data.jobs).forEach(widen);
   for (const g of input.goals) for (const item of g.items) widen(itemWindow(item, g));
 
@@ -189,7 +189,7 @@ export function planSetAsides(input: SetAsides, data: EngineData, from: LocalDat
       plan.byKind[kind].set(d, (plan.byKind[kind].get(d) ?? 0) + v);
     }
   };
-  for (const b of input.bills) add('bills', b.id, billShares(b, from, to, isEarningDay));
+  for (const b of input.bills) add('bills', b.id, billShares(b, from, to, isEarningDay, data.jobs));
   for (const s of input.savings) add('savings', s.id, savingShares(s, from, to, isEarningDay, data.jobs));
   for (const g of input.goals) add('goals', g.id, goalShares(g, from, to, isEarningDay));
   return plan;
