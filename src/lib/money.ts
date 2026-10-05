@@ -8,6 +8,7 @@ export type SpendCheck = (tx: Transaction) => boolean;
 
 /** Why a transaction isn't counted as spending, or null if it is. */
 export function notCountedReason(tx: Transaction, bills: Record<string, Bill>): string | null {
+  if (tx.accountOff) return 'From an account you switched off';
   if (tx.excluded) return 'Left out of spending';
   if (tx.jobId) return 'Paycheck, already counted hourly';
   if (tx.flow === 'income') return 'Deposit, already counted as pay';

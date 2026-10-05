@@ -33,6 +33,8 @@ export interface ItemStatus {
   createdAt: number;
   syncedAt: number | null;
   refreshedAt: number | null;
+  /** Plaid's progress pulling history: NOT_READY, INITIAL_UPDATE_COMPLETE, or HISTORICAL_UPDATE_COMPLETE. */
+  updateStatus: string | null;
 }
 
 export interface BankStatus {
@@ -58,6 +60,7 @@ interface ItemRow {
   created_at: number;
   synced_at: number | null;
   refreshed_at: number | null;
+  update_status: string | null;
 }
 
 interface Config {
@@ -104,6 +107,9 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
       refreshed_at INTEGER
     );
   `);
+  // Columns added after the first release.
+  const cols = new Set((db.prepare('PRAGMA table_info(plaid_items)').all() as Array<{ name: string }>).map((c) => c.name));
+  if (!cols.has('update_status')) db.exec('ALTER TABLE plaid_items ADD COLUMN update_status TEXT');
   const kvGet = (k: string) => (db.prepare('SELECT v FROM kv WHERE k = ?').get(k) as { v: string } | undefined)?.v;
   const kvSet = (k: string, v: string) => db.prepare('INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT (k) DO UPDATE SET v = excluded.v').run(k, v);
   const rows = () => db.prepare('SELECT * FROM plaid_items ORDER BY created_at').all() as unknown as ItemRow[];
@@ -147,6 +153,7 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
         createdAt: r.created_at,
         syncedAt: r.synced_at,
         refreshedAt: r.refreshed_at,
+        updateStatus: r.update_status,
       })),
     };
   }
@@ -180,6 +187,7 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
       let removed: Array<{ transaction_id: string }> = [];
       let accounts: PlaidAccount[] | undefined;
       let cursor = item.cursor;
+      let updateStatus = item.update_status;
       for (let attempt = 0; ; attempt++) {
         try {
           cursor = item.cursor;
@@ -192,6 +200,7 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
             modified.push(...page.modified);
             removed.push(...page.removed);
             if (page.accounts?.length) accounts = page.accounts;
+            if (page.transactions_update_status) updateStatus = page.transactions_update_status;
             cursor = page.next_cursor;
             more = page.has_more;
           }
@@ -232,9 +241,12 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
         if (existing && !existing.deleted) changes.push({ c: 'transactions', rec: { ...existing, deleted: true, updatedAt: Math.max(now, existing.updatedAt + 1) } });
       }
       if (changes.length) store.apply(changes);
-      update(itemId, { cursor, accounts: JSON.stringify(accountInfos), status: 'ok', error: null, synced_at: now });
+      update(itemId, { cursor, accounts: JSON.stringify(accountInfos), status: 'ok', error: null, synced_at: now, update_status: updateStatus });
       if (added.length || modified.length || removed.length)
         log(`${item.institution ?? itemId}: +${added.length} ~${modified.length} -${removed.length}`);
+      if (updateStatus !== item.update_status) log(`${item.institution ?? itemId}: Plaid says ${updateStatus}`);
+      // Until Plaid has the whole history, check back every 2 minutes (for the first few hours).
+      if (updateStatus && updateStatus !== 'HISTORICAL_UPDATE_COMPLETE' && now - item.created_at < 6 * 3_600_000) followUp(itemId, [120_000]);
       return { added: added.length, modified: modified.length, removed: removed.length };
     } catch (e) {
       const d = describe(e);
@@ -251,7 +263,11 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
     for (const t of followUps.get(itemId) ?? []) clearTimeout(t);
     followUps.set(
       itemId,
-      delays.map((ms) => setTimeout(() => void syncItem(itemId), ms)),
+      delays.map((ms) => {
+        const t = setTimeout(() => void syncItem(itemId), ms);
+        t.unref?.();
+        return t;
+      }),
     );
   }
 
@@ -291,22 +307,35 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
     for (const r of rows()) await syncItem(r.item_id);
   }
 
+  /**
+   * Makes every bank transaction's accountOff flag match its account's switch.
+   * Also clears the old way switched-off accounts were marked (excluded on unedited transactions).
+   */
+  function reconcileAccounts() {
+    const included = new Map<string, boolean>();
+    for (const r of rows()) for (const a of JSON.parse(r.accounts) as AccountInfo[]) included.set(a.id, a.included);
+    const now = Date.now();
+    const changes: Change[] = [];
+    for (const tx of store.all('transactions')) {
+      if (tx.source !== 'plaid' || !tx.accountId || !included.has(tx.accountId)) continue;
+      const off = !included.get(tx.accountId);
+      const legacy = !tx.edited && tx.excluded;
+      if (!!tx.accountOff === off && !legacy) continue;
+      const rec = { ...tx, updatedAt: Math.max(now, tx.updatedAt + 1) };
+      if (off) rec.accountOff = true;
+      else delete rec.accountOff;
+      if (legacy) delete rec.excluded;
+      changes.push({ c: 'transactions', rec });
+    }
+    if (changes.length) store.apply(changes);
+  }
+
   function setAccountIncluded(itemId: string, accountId: string, included: boolean) {
     const item = row(itemId);
     if (!item) throw new BankError('No such bank connection.', 404);
     const accounts = (JSON.parse(item.accounts) as AccountInfo[]).map((a) => (a.id === accountId ? { ...a, included } : a));
     update(itemId, { accounts: JSON.stringify(accounts) });
-    const now = Date.now();
-    const changes: Change[] = store
-      .all('transactions')
-      .filter((tx) => tx.accountId === accountId && !tx.edited && !!tx.excluded === included)
-      .map((tx) => {
-        const rec = { ...tx, updatedAt: Math.max(now, tx.updatedAt + 1) };
-        if (included) delete rec.excluded;
-        else rec.excluded = true;
-        return { c: 'transactions' as const, rec };
-      });
-    if (changes.length) store.apply(changes);
+    reconcileAccounts();
   }
 
   async function removeItem(itemId: string) {
@@ -353,6 +382,7 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
     },
     /** Sync every hour; ask banks for fresh data every 6 hours. */
     schedule() {
+      reconcileAccounts();
       const first = setTimeout(() => void syncAll(), 20_000);
       const hourly = setInterval(() => void syncAll(), 3_600_000);
       const refreshes = setInterval(() => void refresh(), 6 * 3_600_000);

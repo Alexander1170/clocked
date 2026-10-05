@@ -97,7 +97,7 @@ export function buildDayFeed({ date, segs, gigs, txs, jobs, cats, bills, now }: 
   }
 
   for (const tx of txs) {
-    if (tx.deleted || tx.date !== date) continue;
+    if (tx.deleted || tx.accountOff || tx.date !== date) continue;
     const cat = cats[tx.categoryId];
     const when = tx.at ? clock(tx.at) : tx.pending ? 'Pending' : '';
     const muted = notCountedReason(tx, bills) ?? undefined;

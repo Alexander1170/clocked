@@ -134,6 +134,19 @@ function ItemCard({ item }: { item: ItemStatus }) {
         </button>
       </div>
 
+      {item.status === 'ok' && item.updateStatus && item.updateStatus !== 'HISTORICAL_UPDATE_COMPLETE' && (
+        <div className="mt-4 flex items-start gap-3 rounded-2xl bg-raised p-3.5 text-[14px]">
+          <RefreshCw size={17} className="mt-0.5 shrink-0 animate-spin text-ink-2" />
+          <p className="text-ink-2">
+            {item.updateStatus !== 'NOT_READY'
+              ? 'Your recent transactions are in. Plaid is still pulling older history.'
+              : Date.now() - item.createdAt < 15 * 60_000
+                ? `Plaid is pulling your transactions from ${item.institution}. They usually show up within a few minutes.`
+                : `Plaid hasn't been able to get your transactions from ${item.institution} yet. It keeps retrying, and they'll show up here on their own. No need to reconnect.`}
+          </p>
+        </div>
+      )}
+
       {item.status !== 'ok' && (
         <div className="mt-4 flex items-start gap-3 rounded-2xl bg-spend/10 p-3.5 text-[14px]">
           <CircleAlert size={18} className="mt-0.5 shrink-0 text-spend" />
@@ -159,12 +172,12 @@ function ItemCard({ item }: { item: ItemStatus }) {
               <span className="block text-[13px] text-ink-2">
                 {a.subtype ?? a.type}
                 {a.balance != null && ` · ${money(a.balance)}`}
-                {!a.included && ' · not counted'}
+                {!a.included && ' · hidden'}
               </span>
             </span>
             <Toggle
               checked={a.included}
-              label={`Count spending from ${a.name}`}
+              label={`Use ${a.name}${a.mask ? ` ••${a.mask}` : ''}`}
               onChange={(v) => void run('account', async () => set(await bankApi.setAccount(item.itemId, a.id, v)))}
             />
           </div>
@@ -306,7 +319,7 @@ export function Bank() {
           </div>
 
           <p className="mt-6 text-[13px] text-ink-2">
-            New transactions show up a few times a day; Refresh asks the bank right away. Purchases count on the day you made them, deposits and transfers between your
+            Switch off accounts you don't want: their transactions stay hidden. New transactions show up a few times a day; Refresh asks the bank right away. Purchases count on the day you made them, deposits and transfers between your
             accounts aren't counted as spending, and bill payments are covered by their daily set-aside.
           </p>
         </>

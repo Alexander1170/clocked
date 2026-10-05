@@ -102,6 +102,8 @@ export interface Transaction extends BaseRecord {
   pending?: boolean;
   /** Hidden from spending, e.g. a transfer between your own accounts. */
   excluded?: boolean;
+  /** From a bank account you switched off: hidden everywhere. */
+  accountOff?: boolean;
   /**
    * What the money was. Only 'spend' counts as spending: income was already
    * counted as hourly pay, and transfers just move money between accounts.

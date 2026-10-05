@@ -159,8 +159,8 @@ describe('bank sync against a fake Plaid', () => {
     expect(get('t2')!.flow).toBe('income');
     expect(get('t3')!.pending).toBe(true);
     expect(get('t3')!.categoryId).toBe('cat_gas');
-    // Loan accounts don't count toward spending by default.
-    expect(get('t4')!.excluded).toBe(true);
+    // Loan accounts are switched off by default, so their transactions are hidden.
+    expect(get('t4')!.accountOff).toBe(true);
     expect(bank.status().items[0].accounts.map((a) => a.included)).toEqual([true, false]);
   });
 
@@ -210,9 +210,15 @@ describe('bank sync against a fake Plaid', () => {
 
   it('turns an account on and off', () => {
     bank.setAccountIncluded('item_1', 'acc_loan', true);
-    expect(get('t4')!.excluded).toBeUndefined();
+    expect(get('t4')!.accountOff).toBeUndefined();
     bank.setAccountIncluded('item_1', 'acc_loan', false);
-    expect(get('t4')!.excluded).toBe(true);
+    expect(get('t4')!.accountOff).toBe(true);
+    // Edited transactions follow the switch too.
+    expect(get('t1')!.edited).toBe(true);
+    bank.setAccountIncluded('item_1', 'acc_checking', false);
+    expect(get('t1')!.accountOff).toBe(true);
+    bank.setAccountIncluded('item_1', 'acc_checking', true);
+    expect(get('t1')!.accountOff).toBeUndefined();
   });
 
   it('removes a connection and its transactions', async () => {

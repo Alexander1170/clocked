@@ -166,7 +166,7 @@ export function Spending() {
 
   const selDate = sel != null ? buckets[sel]?.date : undefined;
   const listed = txs
-    .filter((tx) => tx.date >= from && tx.date <= to && (!selDate || tx.date === selDate) && (!catFilter || tx.categoryId === catFilter))
+    .filter((tx) => !tx.accountOff && tx.date >= from && tx.date <= to && (!selDate || tx.date === selDate) && (!catFilter || tx.categoryId === catFilter))
     .sort((a, b) => b.date.localeCompare(a.date) || (b.at ?? 0) - (a.at ?? 0));
   const groups = new Map<LocalDate, Transaction[]>();
   for (const tx of listed) groups.set(tx.date, [...(groups.get(tx.date) ?? []), tx]);

@@ -122,10 +122,11 @@ export function mapPlaidTransaction(t: PlaidTransaction, ctx: MapContext): Trans
     rec.flow = flowFor(amount, pfc?.primary, pfc?.detailed);
     rec.categoryId = ruleCategory(merchant, ctx.rules) ?? categoryFor(pfc?.primary, pfc?.detailed);
     rec.billId = rec.flow === 'spend' && amount > 0 ? matchBill(merchant, ctx.bills) : undefined;
-    rec.excluded = ctx.account && !ctx.account.included ? true : undefined;
     rec.note = prev?.note;
   }
 
+  // Switching an account off hides its transactions, edited or not.
+  rec.accountOff = ctx.account && !ctx.account.included ? true : undefined;
   for (const k of Object.keys(rec) as Array<keyof Transaction>) if (rec[k] === undefined) delete rec[k];
   return rec;
 }
