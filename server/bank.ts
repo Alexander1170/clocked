@@ -230,13 +230,14 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
 
       const rules = store.all('rules');
       const bills = store.all('bills');
+      const categoryGone = (id: string) => !!store.get('categories', id)?.deleted;
       const now = Date.now();
       const changes: Change[] = [];
       for (const t of [...added, ...modified]) {
         const existing = store.get('transactions', `plaid_${t.transaction_id}`);
         const carryFrom = !existing && t.pending_transaction_id ? store.get('transactions', `plaid_${t.pending_transaction_id}`) : undefined;
         const acct = byAccount.get(t.account_id);
-        const rec = mapPlaidTransaction(t, { existing, carryFrom, rules, bills, account: acct && { name: accountLabel(acct), included: acct.included }, now });
+        const rec = mapPlaidTransaction(t, { existing, carryFrom, rules, bills, categoryGone, account: acct && { name: accountLabel(acct), included: acct.included }, now });
         changes.push({ c: 'transactions', rec });
       }
       for (const r of removed) {

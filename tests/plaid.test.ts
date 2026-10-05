@@ -117,6 +117,14 @@ describe('categorizing', () => {
     expect(categoryFor('TRANSPORTATION', 'TRANSPORTATION_GAS')).toBe('cat_gas');
     expect(categoryFor('ENTERTAINMENT', 'ENTERTAINMENT_TV_AND_MOVIES')).toBe('cat_subs');
     expect(categoryFor('SOMETHING_NEW', 'SOMETHING_NEW_THING')).toBe('cat_other');
+    expect(categoryFor('RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_RENT')).toBe('cat_rent');
+    expect(categoryFor('RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY')).toBe('cat_utilities');
+    expect(categoryFor('RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_TELEPHONE')).toBe('cat_phone');
+    expect(categoryFor('RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_SOMETHING_NEW')).toBe('cat_bills');
+    expect(categoryFor('GENERAL_SERVICES', 'GENERAL_SERVICES_INSURANCE')).toBe('cat_insurance');
+    expect(categoryFor('LOAN_PAYMENTS', 'LOAN_PAYMENTS_CAR_PAYMENT')).toBe('cat_debt');
+    expect(categoryFor('MEDICAL', 'MEDICAL_VETERINARY_SERVICES')).toBe('cat_pets');
+    expect(categoryFor('GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_CLOTHING_AND_ACCESSORIES')).toBe('cat_clothes');
   });
 
   it('cleans raw bank descriptions', () => {
@@ -206,6 +214,18 @@ describe('bank sync against a fake Plaid', () => {
     await bank.syncItem('item_1');
     expect(get('t5')!.categoryId).toBe('cat_groceries');
     expect(get('t6')!.billId).toBe('bill_phone');
+    expect(get('t6')!.categoryId).toBe('cat_phone');
+  });
+
+  it('files purchases for a deleted category under Other', async () => {
+    store.apply([change('categories', { id: 'cat_pets', updatedAt: 5, name: 'Pets', icon: 'paw', sort: 11.5, deleted: true })]);
+    fake.pages[4] = {
+      added: [tx('t7', { merchant_name: 'Petco', personal_finance_category: { primary: 'GENERAL_MERCHANDISE', detailed: 'GENERAL_MERCHANDISE_PET_SUPPLIES' } })],
+      modified: [],
+      removed: [],
+    };
+    await bank.syncItem('item_1');
+    expect(get('t7')!.categoryId).toBe('cat_other');
   });
 
   it('turns an account on and off', () => {

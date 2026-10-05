@@ -5,12 +5,12 @@ import type { Bill, BillFrequency } from '../../shared/types.ts';
 import { billStatus, earningDays, nextDueOnOrAfter } from '../../shared/bills.ts';
 import { addDays, toLocalDate } from '../../shared/dates.ts';
 import { useData } from '../lib/store.ts';
-import { useCategories, useEngineData, useSettings, useTransactions } from '../lib/hooks.ts';
-import { categoryIcon } from '../lib/categories.ts';
+import { useCategoryMap, useEngineData, useSettings, useTransactions } from '../lib/hooks.ts';
 import { newId } from '../lib/ids.ts';
 import { dayLabel, money } from '../lib/format.ts';
 import { closeSheet, toast } from '../lib/ui.ts';
 import { Field, MoneyInput, parseMoney, Sheet } from '../components/ui.tsx';
+import { CategoryPicker } from '../components/CategoryPicker.tsx';
 
 export const BILL_FREQUENCIES: Array<{ value: BillFrequency; label: string }> = [
   { value: 'weekly', label: 'Every week' },
@@ -25,7 +25,6 @@ export function BillSheet({ id, fromTx }: { id?: string; fromTx?: string }) {
   const tx = useData((s) => (fromTx ? s.t.transactions[fromTx] : undefined));
   const put = useData((s) => s.put);
   const remove = useData((s) => s.remove);
-  const cats = useCategories();
   const txs = useTransactions();
   const data = useEngineData();
   const { billSpread } = useSettings();
@@ -37,7 +36,11 @@ export function BillSheet({ id, fromTx }: { id?: string; fromTx?: string }) {
   const [dueDate, setDueDate] = useState(
     existing ? nextDueOnOrAfter(existing, today) : tx ? nextDueOnOrAfter({ frequency: 'monthly', dueDate: tx.date }, addDays(today, 1)) : '',
   );
-  const [categoryId, setCategoryId] = useState(existing?.categoryId ?? (tx?.categoryId && tx.categoryId !== 'cat_other' ? tx.categoryId : 'cat_bills'));
+  const liveCats = useCategoryMap();
+  const [categoryId, setCategoryId] = useState(() => {
+    const start = existing?.categoryId ?? (tx?.categoryId && tx.categoryId !== 'cat_other' ? tx.categoryId : 'cat_bills');
+    return liveCats[start] ? start : 'cat_bills';
+  });
   const [match, setMatch] = useState(existing?.match ?? tx?.merchant ?? '');
   const [startDate, setStartDate] = useState(existing?.startDate ?? today);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -167,24 +170,7 @@ export function BillSheet({ id, fromTx }: { id?: string; fromTx?: string }) {
         </Field>
         <div>
           <span className="label">Category</span>
-          <div className="flex flex-wrap gap-2">
-            {cats.map((c) => {
-              const Icon = categoryIcon(c.icon);
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => setCategoryId(c.id)}
-                  aria-pressed={categoryId === c.id}
-                  className={clsx(
-                    'inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-[14px] font-medium transition-colors',
-                    categoryId === c.id ? 'border-ink bg-ink text-inverse' : 'border-line text-ink-2 hover:text-ink',
-                  )}
-                >
-                  <Icon size={15} /> {c.name}
-                </button>
-              );
-            })}
-          </div>
+          <CategoryPicker value={categoryId} onChange={setCategoryId} />
         </div>
         {error && <p className="text-[14px] text-spend">{error}</p>}
       </div>

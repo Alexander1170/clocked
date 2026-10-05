@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Bill, Category, GigJob, Goal, Job, LocalDate, Rule, Saving, ScheduledJob, Settings } from '../../shared/types.ts';
 import { planSetAsides, type SetAsidePlan } from '../../shared/plan.ts';
 import { makeSpendCheck, type Coverage, type SpendCheck } from './money.ts';
 import type { EngineData } from '../../shared/accrual.ts';
 import { toLocalDate } from '../../shared/dates.ts';
 import { live, useData } from './store.ts';
+import { FALLBACK_CATEGORY } from './categories.ts';
 
 /** Re-renders every `ms` and returns the current time. */
 export function useNow(ms = 1000): number {
@@ -55,8 +56,16 @@ export function useCategories(): Category[] {
   return useMemo(() => live(cats).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name)), [cats]);
 }
 
+/** Categories by id, without deleted ones, so a transaction still pointing at one shows as Other. */
 export function useCategoryMap(): Record<string, Category> {
-  return useData((s) => s.t.categories);
+  const cats = useData((s) => s.t.categories);
+  return useMemo(() => Object.fromEntries(Object.entries(cats).filter(([, c]) => !c.deleted)), [cats]);
+}
+
+/** The category a transaction counts under: its own, or Other if that one was deleted. */
+export function useCategoryOf(): (id: string) => string {
+  const cats = useCategoryMap();
+  return useCallback((id: string) => (cats[id] ? id : FALLBACK_CATEGORY), [cats]);
 }
 
 export const DEFAULT_SETTINGS: Settings = { id: 'main', updatedAt: 1, weekStartsOn: 1 };

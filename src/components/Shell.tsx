@@ -14,6 +14,7 @@ import { JobSheet } from '../sheets/JobSheet.tsx';
 import { BillSheet } from '../sheets/BillSheet.tsx';
 import { SavingSheet } from '../sheets/SavingSheet.tsx';
 import { GoalSheet } from '../sheets/GoalSheet.tsx';
+import { CategorySheet } from '../sheets/CategorySheet.tsx';
 import { SyncBadge } from './SyncBadge.tsx';
 
 /** The phone's bottom tabs. Jobs live in Settings on phones; they change rarely. */
@@ -123,6 +124,9 @@ export function SheetHost() {
         break;
       case 'goal':
         content = <GoalSheet id={top.id} type={top.type} />;
+        break;
+      case 'category':
+        content = <CategorySheet id={top.id} />;
         break;
     }
   }

@@ -4,13 +4,14 @@ import { Gift, Landmark, PiggyBank, Plus, Trash } from 'lucide-react';
 import type { LocalDate, Rule, Transaction } from '../../shared/types.ts';
 import { at, hhmm, toLocalDate } from '../../shared/dates.ts';
 import { useData } from '../lib/store.ts';
-import { useBills, useCategories, useCoverage, useGoals, useTransactions } from '../lib/hooks.ts';
-import { categoryIcon, FALLBACK_CATEGORY } from '../lib/categories.ts';
+import { useBills, useCategoryMap, useCoverage, useGoals, useTransactions } from '../lib/hooks.ts';
+import { FALLBACK_CATEGORY } from '../lib/categories.ts';
 import { newId } from '../lib/ids.ts';
 import { dayLabel, minus, money, signed } from '../lib/format.ts';
 import { notCountedReason } from '../lib/money.ts';
 import { closeSheet, toast, useSheets } from '../lib/ui.ts';
 import { Field, MoneyInput, parseMoney, Segmented, Sheet, Toggle } from '../components/ui.tsx';
+import { CategoryPicker } from '../components/CategoryPicker.tsx';
 
 const timeOf = (t: number) => hhmm(new Date(t).getHours() * 60 + new Date(t).getMinutes());
 const ruleId = (merchant: string) => `rule_${merchant.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
@@ -19,7 +20,6 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
   const existing = useData((s) => (id ? s.t.transactions[id] : undefined));
   const put = useData((s) => s.put);
   const remove = useData((s) => s.remove);
-  const cats = useCategories();
   const txs = useTransactions();
   const bills = useBills();
   const goals = useGoals().filter((g) => g.items.some((i) => !i.boughtOn) || g.id === existing?.goalId);
@@ -31,7 +31,9 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
   const [amount, setAmount] = useState(existing ? String(Math.abs(existing.amount)) : '');
   const [direction, setDirection] = useState<'out' | 'in'>(existing && existing.amount < 0 ? 'in' : 'out');
   const [merchant, setMerchant] = useState(existing?.merchant ?? '');
-  const [categoryId, setCategoryId] = useState(existing?.categoryId ?? '');
+  const liveCats = useCategoryMap();
+  // A category deleted since this was tagged reads as none picked, so saving files it under Other.
+  const [categoryId, setCategoryId] = useState(existing && liveCats[existing.categoryId] ? existing.categoryId : '');
   const [day, setDay] = useState(existing?.date ?? date ?? today);
   const [time, setTime] = useState(existing?.at ? timeOf(existing.at) : (date ?? today) === today ? timeOf(Date.now()) : '');
   const [note, setNote] = useState(existing?.note ?? '');
@@ -172,25 +174,7 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
 
         <div>
           <span className="label">Category</span>
-          <div className="flex flex-wrap gap-2">
-            {cats.map((c) => {
-              const Icon = categoryIcon(c.icon);
-              const on = (categoryId || '') === c.id;
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => setCategoryId(c.id)}
-                  aria-pressed={on}
-                  className={clsx(
-                    'inline-flex h-9 items-center gap-1.5 rounded-full border px-3 text-[14px] font-medium transition-colors',
-                    on ? 'border-ink bg-ink text-inverse' : 'border-line text-ink-2 hover:text-ink',
-                  )}
-                >
-                  <Icon size={15} /> {c.name}
-                </button>
-              );
-            })}
-          </div>
+          <CategoryPicker value={categoryId} onChange={setCategoryId} />
           {categoryChanged && merchant.trim() && (
             <label className="mt-3 flex items-center justify-between gap-4 rounded-2xl bg-raised px-4 py-3">
               <span className="text-[14px]">

@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { ArrowLeft, Briefcase, ChevronRight, Download, Landmark, RefreshCw, Upload } from 'lucide-react';
+import { ArrowLeft, Briefcase, ChevronRight, Download, Landmark, RefreshCw, Tags, Upload } from 'lucide-react';
 import type { BaseRecord, Change, CollectionName } from '../../shared/types.ts';
 import { COLLECTIONS } from '../../shared/types.ts';
 import { useData } from '../lib/store.ts';
@@ -103,6 +103,16 @@ export function Settings() {
           <span className="min-w-0 flex-1">
             <span className="block text-[15px] font-semibold">Bank connection</span>
             <span className="block text-[13px] text-ink-2">Bring in bank transactions through Plaid</span>
+          </span>
+          <ChevronRight size={18} className="text-ink-3" />
+        </button>
+        <button onClick={() => go('categories')} className="flex w-full items-center gap-3 text-left">
+          <span className="grid size-10 shrink-0 place-items-center rounded-full bg-raised">
+            <Tags size={19} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-semibold">Categories</span>
+            <span className="block text-[13px] text-ink-2">Add, rename, or remove spending categories</span>
           </span>
           <ChevronRight size={18} className="text-ink-3" />
         </button>

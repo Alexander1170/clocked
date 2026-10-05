@@ -59,7 +59,8 @@ app.get('/api/events', (c) =>
       void stream.writeSSE({ event: 'change', data: JSON.stringify({ seq }) }).catch(() => {});
     };
     const unsubscribe = store.subscribe(notify);
-    const ping = setInterval(() => void stream.write(': ping\n\n').catch(() => {}), 25_000);
+    // A named event rather than a comment, so the app can tell the stream is still alive.
+    const ping = setInterval(() => void stream.writeSSE({ event: 'ping', data: JSON.stringify({ seq: store.seq() }) }).catch(() => {}), 25_000);
     await stream.writeSSE({ event: 'hello', data: JSON.stringify({ seq: store.seq() }) });
     await new Promise<void>((resolve) => stream.onAbort(resolve));
     clearInterval(ping);

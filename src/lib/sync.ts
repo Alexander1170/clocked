@@ -79,17 +79,37 @@ export async function syncNow(): Promise<void> {
 }
 
 let events: EventSource | null = null;
+let lastHeard = 0;
+
+/** The server pings every 25 seconds, so this much quiet means the stream died without saying so. */
+const STALE_MS = 70_000;
+
+function onServerSeq(e: Event) {
+  lastHeard = Date.now();
+  const { seq } = JSON.parse((e as MessageEvent<string>).data) as { seq: number };
+  void idb.getMeta<number>('lastSeq').then((last) => {
+    if (seq > (last ?? 0)) requestSync(50);
+  });
+}
 
 function connectEvents() {
   events?.close();
-  events = new EventSource('/api/events');
-  events.addEventListener('change', (e) => {
-    const { seq } = JSON.parse((e as MessageEvent<string>).data) as { seq: number };
-    void idb.getMeta<number>('lastSeq').then((last) => {
-      if (seq > (last ?? 0)) requestSync(50);
-    });
+  const es = new EventSource('/api/events');
+  events = es;
+  lastHeard = Date.now();
+  // Every event carries the server's latest change number, so any of them can start a catch-up.
+  for (const name of ['hello', 'change', 'ping']) es.addEventListener(name, onServerSeq);
+  // The browser retries a dropped stream by itself, but gives up for good if a retry fails,
+  // say while the server restarts for an update. Start a new one when that happens.
+  es.addEventListener('error', () => {
+    if (es.readyState !== EventSource.CLOSED) return;
+    setTimeout(() => {
+      if (events === es) connectEvents();
+    }, 5000);
   });
 }
+
+const streamDead = () => !events || events.readyState === EventSource.CLOSED || Date.now() - lastHeard > STALE_MS;
 
 let started = false;
 
@@ -105,8 +125,11 @@ export function startSync() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
     requestSync(0);
-    if (!events || events.readyState === EventSource.CLOSED) connectEvents();
+    if (streamDead()) connectEvents();
   });
   window.addEventListener('online', () => requestSync(0));
-  setInterval(() => requestSync(0), 60_000);
+  setInterval(() => {
+    requestSync(0);
+    if (streamDead()) connectEvents();
+  }, 60_000);
 }

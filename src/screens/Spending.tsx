@@ -5,7 +5,7 @@ import type { LocalDate, Transaction } from '../../shared/types.ts';
 import { buildSegments, tally } from '../../shared/accrual.ts';
 import type { SetAsideKind } from '../../shared/plan.ts';
 import { toLocalDate } from '../../shared/dates.ts';
-import { useBillMap, useCategories, useCategoryMap, useCoverage, useEngineData, useNow, useSetAsidePlan, useSettings, useSpendCheck, useTransactions } from '../lib/hooks.ts';
+import { useBillMap, useCategories, useCategoryMap, useCategoryOf, useCoverage, useEngineData, useNow, useSetAsidePlan, useSettings, useSpendCheck, useTransactions } from '../lib/hooks.ts';
 import { bucketIndexAt, bucketsFor, periodBounds, periodTitle, shiftAnchor } from '../lib/periods.ts';
 import { categoryIcon } from '../lib/categories.ts';
 import { clock, dayLabel, minus, money, relativeDay, signed } from '../lib/format.ts';
@@ -123,11 +123,12 @@ export function Spending() {
   const sel = picked?.key === windowKey ? picked.i : nowIndex >= 0 ? nowIndex : null;
   const select = (i: number) => setPicked({ key: windowKey, i: sel === i ? null : i });
 
-  const counted = (tx: Transaction) => counts(tx) && (!catFilter || tx.categoryId === catFilter);
+  const catOf = useCategoryOf();
+  const counted = (tx: Transaction) => counts(tx) && (!catFilter || catOf(tx.categoryId) === catFilter);
   // "Left" is about all your money, so the category filter only narrows the Spent view.
   const spentDays = useMemo(
-    () => spentByDay(txs, from, to, (tx) => counts(tx) && (mode === 'left' || !catFilter || tx.categoryId === catFilter)),
-    [txs, from, to, counts, catFilter, mode],
+    () => spentByDay(txs, from, to, (tx) => counts(tx) && (mode === 'left' || !catFilter || catOf(tx.categoryId) === catFilter)),
+    [txs, from, to, counts, catFilter, mode, catOf],
   );
   const segs = useMemo(() => buildSegments(data, from, to, now), [data, from, to, now]);
   const earnedDays = useMemo(() => buckets.map((b) => tally(segs, b.start, b.end, now)), [buckets, segs, now]);
@@ -174,14 +175,14 @@ export function Spending() {
 
   const byCat = useMemo(() => {
     const m = new Map<string, number>();
-    for (const tx of txs) if (tx.date >= from && tx.date <= to && counts(tx)) m.set(tx.categoryId, (m.get(tx.categoryId) ?? 0) + tx.amount);
+    for (const tx of txs) if (tx.date >= from && tx.date <= to && counts(tx)) m.set(catOf(tx.categoryId), (m.get(catOf(tx.categoryId)) ?? 0) + tx.amount);
     return [...m.entries()].filter(([, v]) => v > 0.005).sort((a, b) => b[1] - a[1]);
-  }, [txs, from, to, counts]);
+  }, [txs, from, to, counts, catOf]);
   const catTotal = byCat.reduce((t, [, v]) => t + v, 0);
 
   const selDate = sel != null ? buckets[sel]?.date : undefined;
   const listed = txs
-    .filter((tx) => !tx.accountOff && tx.date >= from && tx.date <= to && (!selDate || tx.date === selDate) && (!catFilter || tx.categoryId === catFilter))
+    .filter((tx) => !tx.accountOff && tx.date >= from && tx.date <= to && (!selDate || tx.date === selDate) && (!catFilter || catOf(tx.categoryId) === catFilter))
     .sort((a, b) => b.date.localeCompare(a.date) || (b.at ?? 0) - (a.at ?? 0));
   const groups = new Map<LocalDate, Transaction[]>();
   for (const tx of listed) groups.set(tx.date, [...(groups.get(tx.date) ?? []), tx]);
