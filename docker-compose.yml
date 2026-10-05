@@ -1,0 +1,15 @@
+services:
+  clocked:
+    build: .
+    image: clocked:latest
+    container_name: clocked
+    restart: unless-stopped
+    # Loopback only: the app is reached through Tailscale Serve (HTTPS, tailnet-only), never the LAN.
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ./data:/data
+    environment:
+      TZ: America/New_York
+      # Set in .env next to this file. Only these Tailscale logins can use the API.
+      ALLOWED_TS_USERS: ${ALLOWED_TS_USERS:-}
