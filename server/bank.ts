@@ -211,18 +211,20 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
           throw e;
         }
       }
-      accounts ??= await c.accounts(item.access_token);
-
       const prevAccounts = JSON.parse(item.accounts) as AccountInfo[];
-      const accountInfos: AccountInfo[] = accounts.map((a) => ({
-        id: a.account_id,
-        name: a.name,
-        mask: a.mask ?? null,
-        type: a.type,
-        subtype: a.subtype ?? null,
-        balance: a.balances?.current ?? null,
-        included: prevAccounts.find((p) => p.id === a.account_id)?.included ?? includedByDefault(a),
-      }));
+      // Balances only move when transactions do, so skip the extra call on quiet checks.
+      if (!accounts && (!prevAccounts.length || added.length || modified.length || removed.length)) accounts = await c.accounts(item.access_token);
+      const accountInfos: AccountInfo[] = !accounts
+        ? prevAccounts
+        : accounts.map((a) => ({
+            id: a.account_id,
+            name: a.name,
+            mask: a.mask ?? null,
+            type: a.type,
+            subtype: a.subtype ?? null,
+            balance: a.balances?.current ?? null,
+            included: prevAccounts.find((p) => p.id === a.account_id)?.included ?? includedByDefault(a),
+          }));
       const byAccount = new Map(accountInfos.map((a) => [a.id, a]));
 
       const rules = store.all('rules');
@@ -245,8 +247,9 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
       if (added.length || modified.length || removed.length)
         log(`${item.institution ?? itemId}: +${added.length} ~${modified.length} -${removed.length}`);
       if (updateStatus !== item.update_status) log(`${item.institution ?? itemId}: Plaid says ${updateStatus}`);
-      // Until Plaid has the whole history, check back every 2 minutes (for the first few hours).
-      if (updateStatus && updateStatus !== 'HISTORICAL_UPDATE_COMPLETE' && now - item.created_at < 6 * 3_600_000) followUp(itemId, [120_000]);
+      // Until Plaid has the whole history, check back: every 2 minutes at first, then every 10, for a few hours.
+      const age = now - item.created_at;
+      if (updateStatus && updateStatus !== 'HISTORICAL_UPDATE_COMPLETE' && age < 6 * 3_600_000) followUp(itemId, [age < 30 * 60_000 ? 120_000 : 600_000]);
       return { added: added.length, modified: modified.length, removed: removed.length };
     } catch (e) {
       const d = describe(e);
