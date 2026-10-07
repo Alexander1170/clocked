@@ -1,6 +1,6 @@
 import type { Bill, Goal, LocalDate, ScheduledJob, Transaction } from '../../shared/types.ts';
 import { buildSegments, earnedBetween, valueIn, type EngineData } from '../../shared/accrual.ts';
-import { addDays, dayEnd, dayStart, toLocalDate } from '../../shared/dates.ts';
+import { addDays, dayEnd, dayStart, diffDays, toLocalDate } from '../../shared/dates.ts';
 import type { SetAsideKind, SetAsidePlan } from '../../shared/plan.ts';
 import { hourlyRate, nextPaydayOnOrAfter, periodForPayday, unpaidFrom, weeklyPaidHours } from '../../shared/pay.ts';
 import { money } from './format.ts';
@@ -190,3 +190,7 @@ export function splitDay(d: { earned: number; setAside: number; spent: number })
     net: d.earned - d.setAside - d.spent,
   };
 }
+
+/** Paid when a payment linked to the bill landed within two weeks of the day it was planned. */
+export const isPaid = (billId: string, pay: LocalDate, txs: readonly Transaction[]) =>
+  txs.some((t) => t.billId === billId && !t.deleted && Math.abs(diffDays(t.date, pay)) <= 13);

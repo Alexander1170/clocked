@@ -262,3 +262,32 @@ export function planBills(bills: Bill[], data: EngineData, from: LocalDate, to: 
   }
   return { byDay, byBill, isEarningDay };
 }
+
+/** Lowercase words and digits, for comparing names. */
+const words = (s: string) => ` ${s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+/** Bank descriptions run words together ("SUBSDenverCO"). Split them where the case changes. */
+const unglue = (s: string) => s.replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').replace(/([a-z])([A-Z])/g, '$1 $2');
+
+/**
+ * Whether a payment looks like it pays a bill: the bank's description has the
+ * bill's bank name in it as whole words (or the bill's own name, when it has
+ * no bank name), and the amount is within half to one and a half times the
+ * bill's. So a $59.99 game doesn't count as a $9.99 game subscription from
+ * the same store, and "rent" doesn't match "Parent".
+ */
+export function paysBill(bill: Pick<Bill, 'name' | 'match' | 'amount' | 'deleted'>, merchant: string, amount: number, rawName = ''): boolean {
+  if (bill.deleted || !(amount > 0) || !(bill.amount > 0)) return false;
+  if (amount < bill.amount * 0.5 || amount > bill.amount * 1.5) return false;
+  const key = words(bill.match?.trim() || bill.name).trim();
+  return !!key && [merchant, rawName, unglue(merchant), unglue(rawName)].map(words).join('').includes(` ${key} `);
+}
+
+/** The bill a payment pays, if any: of the ones it could pay, the closest in amount. */
+export function billForPayment(bills: readonly Bill[], merchant: string, amount: number, rawName?: string): Bill | undefined {
+  let best: Bill | undefined;
+  for (const b of bills) {
+    if (!paysBill(b, merchant, amount, rawName)) continue;
+    if (!best || Math.abs(amount - b.amount) / b.amount < Math.abs(amount - best.amount) / best.amount) best = b;
+  }
+  return best;
+}

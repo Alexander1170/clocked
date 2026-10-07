@@ -4,7 +4,8 @@ import { Hono } from 'hono';
 import type { Store } from './db.ts';
 import { plaidClient, PlaidError, type PlaidAccount, type PlaidClient, type PlaidEnv, type PlaidTransaction } from './plaid.ts';
 import { cleanName, findManualMatch, mapPlaidTransaction } from './categorize.ts';
-import type { Change } from '../shared/types.ts';
+import { billForPayment, paysBill } from '../shared/bills.ts';
+import type { Change, Transaction } from '../shared/types.ts';
 
 const DAYS_REQUESTED = 180;
 const SANDBOX_INSTITUTION = 'ins_109508'; // First Platypus Bank
@@ -17,6 +18,8 @@ export interface AccountInfo {
   type: string;
   subtype: string | null;
   balance: number | null;
+  /** What's free to spend, after pending charges. */
+  available?: number | null;
   /** Count this account's spending. */
   included: boolean;
 }
@@ -79,15 +82,21 @@ export class BankError extends Error {
 const accountLabel = (a: AccountInfo) => `${a.name}${a.mask ? ` ••${a.mask}` : ''}`;
 const includedByDefault = (a: PlaidAccount) => a.type === 'depository' || a.type === 'credit';
 
-/** Plaid's account, keeping the on/off switch it already had. */
-const accountInfo = (a: PlaidAccount, prev: AccountInfo[]): AccountInfo => ({
+/**
+ * Plaid's account, keeping the on/off switch it already had. A new account
+ * the bank starts sharing on its own stays off once you've switched any
+ * account off, since you've already picked what counts. One you picked in
+ * Plaid yourself starts on.
+ */
+const accountInfo = (a: PlaidAccount, prev: AccountInfo[], picked = false): AccountInfo => ({
   id: a.account_id,
   name: a.name,
   mask: a.mask ?? null,
   type: a.type,
   subtype: a.subtype ?? null,
   balance: a.balances?.current ?? null,
-  included: prev.find((p) => p.id === a.account_id)?.included ?? includedByDefault(a),
+  available: a.balances?.available ?? null,
+  included: prev.find((p) => p.id === a.account_id)?.included ?? (!picked && prev.some((p) => !p.included && (p.type === 'depository' || p.type === 'credit')) ? false : includedByDefault(a)),
 });
 
 function describe(e: unknown): { status: ItemState; message: string } {
@@ -196,7 +205,6 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
       let added: PlaidTransaction[] = [];
       let modified: PlaidTransaction[] = [];
       let removed: Array<{ transaction_id: string }> = [];
-      let accounts: PlaidAccount[] | undefined;
       let cursor = item.cursor;
       let updateStatus = item.update_status;
       for (let attempt = 0; ; attempt++) {
@@ -210,7 +218,6 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
             added.push(...page.added);
             modified.push(...page.modified);
             removed.push(...page.removed);
-            if (page.accounts?.length) accounts = page.accounts;
             if (page.transactions_update_status) updateStatus = page.transactions_update_status;
             cursor = page.next_cursor;
             more = page.has_more;
@@ -223,8 +230,10 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
         }
       }
       const prevAccounts = JSON.parse(item.accounts) as AccountInfo[];
-      // Balances only move when transactions do, so skip the extra call on quiet checks.
-      if (!accounts && (!prevAccounts.length || added.length || modified.length || removed.length)) accounts = await c.accounts(item.access_token);
+      // A sync page only lists the accounts with new activity, so get the full list from
+      // the bank. Balances only move when transactions do, so skip it on quiet checks.
+      const stale = !prevAccounts.length || prevAccounts.some((a) => !('available' in a));
+      const accounts = stale || added.length || modified.length || removed.length ? await c.accounts(item.access_token) : null;
       const accountInfos: AccountInfo[] = accounts ? accounts.map((a) => accountInfo(a, prevAccounts)) : prevAccounts;
       const byAccount = new Map(accountInfos.map((a) => [a.id, a]));
 
@@ -252,7 +261,13 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
           carryFrom = { ...replaces, edited: true };
         }
         const acct = byAccount.get(t.account_id);
-        const rec = mapPlaidTransaction(t, { existing, carryFrom, rules, bills, categoryGone, account: acct && { name: accountLabel(acct), included: acct.included }, now });
+        // An account the bank no longer lists (closed, or no longer shared) doesn't count.
+        const account = acct
+          ? { name: accountLabel(acct), included: acct.included }
+          : accountInfos.length
+            ? { name: existing?.accountName ?? carryFrom?.accountName ?? 'Account no longer shared', included: false }
+            : undefined;
+        const rec = mapPlaidTransaction(t, { existing, carryFrom, rules, bills, categoryGone, account, itemId, now });
         changes.push({ c: 'transactions', rec });
         if (replaces) changes.push({ c: 'transactions', rec: { ...replaces, deleted: true, updatedAt: Math.max(now, replaces.updatedAt + 1) } });
       }
@@ -326,6 +341,34 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
 
   async function syncAll() {
     for (const r of rows()) await syncItem(r.item_id);
+    reconcileAccounts();
+    linkBillPayments();
+  }
+
+  /** Links bank payments to the bills they pay, for ones not linked yet that you haven't edited. */
+  function linkBillPayments() {
+    const bills = store.all('bills');
+    if (!bills.length) return;
+    const now = Date.now();
+    const changes: Change[] = [];
+    const byId = new Map(bills.map((b) => [b.id, b]));
+    for (const tx of store.all('transactions')) {
+      // Links you made yourself are edits, and stay put.
+      if (tx.source !== 'plaid' || tx.edited || !(tx.amount > 0) || tx.flow === 'income') continue;
+      const cur = tx.billId ? byId.get(tx.billId) : undefined;
+      if (cur && paysBill(cur, tx.merchant, tx.amount, tx.rawName)) continue;
+      // Unlinked, or linked to a bill it no longer fits (its bank name changed, or it was deleted).
+      const billId = billForPayment(bills, tx.merchant, tx.amount, tx.rawName)?.id;
+      if (billId === tx.billId) continue;
+      const rec: Transaction = { ...tx, updatedAt: Math.max(now, tx.updatedAt + 1) };
+      if (billId) rec.billId = billId;
+      else delete rec.billId;
+      changes.push({ c: 'transactions', rec });
+    }
+    if (changes.length) {
+      store.apply(changes);
+      log(`relinked ${changes.length} bank payments to bills`);
+    }
   }
 
   /**
@@ -337,8 +380,11 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
     for (const r of rows()) for (const a of JSON.parse(r.accounts) as AccountInfo[]) included.set(a.id, a.included);
     const now = Date.now();
     const changes: Change[] = [];
+    const known = rows().some((r) => (JSON.parse(r.accounts) as AccountInfo[]).length);
     for (const tx of store.all('transactions')) {
-      if (tx.source !== 'plaid' || !tx.accountId || !included.has(tx.accountId)) continue;
+      if (tx.source !== 'plaid' || !tx.accountId) continue;
+      // An account the bank no longer lists doesn't count.
+      if (!included.has(tx.accountId) && !known) continue;
       const off = !included.get(tx.accountId);
       const legacy = !tx.edited && tx.excluded;
       if (!!tx.accountOff === off && !legacy) continue;
@@ -368,10 +414,18 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
       log(`remove at Plaid failed (continuing): ${describe(e).message}`);
     }
     const accountIds = new Set((JSON.parse(item.accounts) as AccountInfo[]).map((a) => a.id));
+    // Older transactions don't say which connection they came from. Ones from an account no
+    // other connection lists, like a closed one, go with this connection.
+    const others = new Set(
+      rows()
+        .filter((r) => r.item_id !== itemId)
+        .flatMap((r) => (JSON.parse(r.accounts) as AccountInfo[]).map((a) => a.id)),
+    );
+    const mine = (tx: Transaction) => (tx.itemId ? tx.itemId === itemId : !!tx.accountId && (accountIds.has(tx.accountId) || !others.has(tx.accountId)));
     const now = Date.now();
     const changes: Change[] = store
       .all('transactions')
-      .filter((tx) => tx.source === 'plaid' && tx.accountId && accountIds.has(tx.accountId))
+      .filter((tx) => tx.source === 'plaid' && mine(tx))
       .map((tx) => ({ c: 'transactions' as const, rec: { ...tx, deleted: true, updatedAt: Math.max(now, tx.updatedAt + 1) } }));
     if (changes.length) store.apply(changes);
     db.prepare('DELETE FROM plaid_items WHERE item_id = ?').run(itemId);
@@ -405,7 +459,7 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
       try {
         const prev = JSON.parse(item.accounts) as AccountInfo[];
         const accounts = await client(item.env).accounts(item.access_token);
-        update(itemId, { accounts: JSON.stringify(accounts.map((a) => accountInfo(a, prev))) });
+        update(itemId, { accounts: JSON.stringify(accounts.map((a) => accountInfo(a, prev, true))) });
       } catch (e) {
         log(`account refresh after reconnect failed: ${describe(e).message}`);
       }

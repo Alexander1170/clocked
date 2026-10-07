@@ -36,7 +36,7 @@ import {
   saveIdea,
   setAsideBetween,
 } from '../lib/insights.ts';
-import { dayLabel, daysUntil, minus, money, monthLong, signed } from '../lib/format.ts';
+import { clock, dayLabel, daysUntil, minus, money, monthLong, signed } from '../lib/format.ts';
 import { categoryIcon } from '../lib/categories.ts';
 import { openSheet, toast } from '../lib/ui.ts';
 import { useData } from '../lib/store.ts';
@@ -73,6 +73,9 @@ function Line({ label, value, strong, swatch }: { label: string; value: string; 
     </div>
   );
 }
+
+/** "2:15 PM" today, or the day it was. */
+const asOf = (t: number, today: LocalDate) => (toLocalDate(t) === today ? clock(t) : dayLabel(toLocalDate(t)));
 
 function Meter({ value, of, over }: { value: number; of: number; over?: boolean }) {
   return (
@@ -114,7 +117,7 @@ export function Insights() {
     const paydays = job ? paydaysBetween(job, monthFrom, monthTo) : [];
     const checks = job ? paydays.reduce((t, p) => t + checkAmount(job, data, p, now), 0) : 0;
     const gig = gigPayBetween(data.gigs, monthFrom, monthTo, now);
-    const billTotal = job && paydays.length ? upcomingPaychecks(job, bills, data.jobs, monthFrom, paydays.length, true).reduce((t, c) => t + c.billTotal, 0) : 0;
+    const billTotal = job && paydays.length ? upcomingPaychecks(job, bills, data.jobs, monthFrom, paydays.length).reduce((t, c) => t + c.billTotal, 0) : 0;
     const saving = setAsideBetween(monthPlan, monthFrom, monthTo);
     const spent = spentBetween(txs, monthFrom, monthTo, counts);
     const pay = checks + gig;
@@ -133,7 +136,8 @@ export function Insights() {
     let all = 0;
     let foodSpent = 0;
     for (const tx of txs) {
-      if (tx.date < from || tx.date > today || !counts(tx)) continue;
+      // Bills are counted on their own, so their payments don't count as your usual spending.
+      if (tx.date < from || tx.date > today || !counts(tx) || tx.billId) continue;
       all += tx.amount;
       if (isFoodCategory(cats[catOf(tx.categoryId)])) foodSpent += tx.amount;
     }
@@ -243,11 +247,17 @@ export function Insights() {
                 <>
                   About <span className="font-semibold text-ink">{money(stretch.perDay)} a day</span> for {stretch.daysLeft} {stretch.daysLeft === 1 ? 'day' : 'days'}
                 </>
+              ) : stretch.fromBank ? (
+                'Checking doesn’t cover what’s still to come out. Go easy until payday.'
               ) : (
                 'More than this check had. Go easy until payday.'
               )}
             </p>
-            <Meter value={Math.max(0, stretch.spent - stretch.gig - stretch.carry)} of={Math.max(1, stretch.start)} over={stretch.free < 0} />
+            {stretch.fromBank ? (
+              <Meter value={stretch.fromBank.balance - stretch.free} of={Math.max(1, stretch.fromBank.balance)} over={stretch.free < 0} />
+            ) : (
+              <Meter value={Math.max(0, stretch.spent - stretch.gig - stretch.carry)} of={Math.max(1, stretch.start)} over={stretch.free < 0} />
+            )}
             {stretch.carry < -0.005 && (
               <p className="num mt-3 rounded-2xl bg-raised px-3.5 py-2.5 text-[13px] text-ink-2">
                 Last paycheck ran {money(-stretch.carry)} short, so it comes out of this one. That's about{' '}
@@ -255,12 +265,27 @@ export function Insights() {
               </p>
             )}
             <div className="mt-4 space-y-1.5 border-t border-line pt-3">
-              <Line label={`Paycheck ${dayLabel(stretch.lastPayday)}`} value={money(stretch.check)} />
-              <Line label="Bills paid from it" value={minus(stretch.bills)} />
+              {stretch.fromBank ? (
+                <>
+                  <Line label={`In checking, as of ${asOf(stretch.fromBank.asOf, today)}`} value={money(stretch.fromBank.balance)} />
+                  {stretch.fromBank.unpaid.map((b, i) => (
+                    <Line key={i} label={`${b.name}, not paid yet`} value={minus(b.amount)} />
+                  ))}
+                </>
+              ) : (
+                <>
+                  <Line label={`Paycheck ${dayLabel(stretch.lastPayday)}`} value={money(stretch.check)} />
+                  <Line label="Bills paid from it" value={minus(stretch.bills)} />
+                </>
+              )}
               {stretch.saving > 0.005 && <Line label="Savings and wish list" value={minus(stretch.saving)} />}
-              {stretch.carry < -0.005 && <Line label="Short from last paycheck" value={minus(-stretch.carry)} />}
-              {stretch.gig > 0.005 && <Line label="Gig pay since then" value={signed(stretch.gig)} />}
-              <Line label="Spent since then" value={minus(stretch.spent)} />
+              {!stretch.fromBank && (
+                <>
+                  {stretch.carry < -0.005 && <Line label="Short from last paycheck" value={minus(-stretch.carry)} />}
+                  {stretch.gig > 0.005 && <Line label="Gig pay since then" value={signed(stretch.gig)} />}
+                  <Line label="Spent since then" value={minus(stretch.spent)} />
+                </>
+              )}
               <Line label="Free until payday" value={money(stretch.free)} strong />
             </div>
           </Card>

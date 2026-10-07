@@ -15,6 +15,7 @@ import {
   splitLeftover,
   stretchEndings,
   untilPayday,
+  untilPaydayFromBalance,
 } from '../src/lib/insights.ts';
 
 const job: ScheduledJob = {
@@ -80,6 +81,19 @@ describe('until payday', () => {
   it('takes the check, less bills, savings, and spending, plus gig pay, over the days left', () => {
     const u = untilPayday({ check: 2000, bills: 1200, saving: 100, gig: 50, spent: 250, today: '2026-10-05', nextPayday: '2026-10-13' });
     expect(u).toEqual({ start: 700, free: 500, daysLeft: 8, perDay: 62.5, carry: 0 });
+  });
+
+  it('starts from the bank balance when there is one', () => {
+    // $640 in checking, a $120 bill still to come out, $40 of savings planned.
+    expect(untilPaydayFromBalance({ balance: 640, unpaid: 120, saving: 40, today: '2026-10-07', nextPayday: '2026-10-13' })).toEqual({
+      start: 640,
+      free: 480,
+      daysLeft: 6,
+      perDay: 80,
+      carry: 0,
+    });
+    // A bill bigger than what's there shows up as short before it bounces.
+    expect(untilPaydayFromBalance({ balance: 5, unpaid: 100, saving: 0, today: '2026-10-07', nextPayday: '2026-10-13' }).free).toBe(-95);
   });
 
   it('makes up a paycheck that ran short from the next one', () => {

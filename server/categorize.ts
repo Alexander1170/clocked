@@ -1,6 +1,7 @@
 // Turns Plaid transactions into Clocked transactions: category, money flow, bill links.
 import type { Bill, LocalDate, Rule, Transaction, TxFlow } from '../shared/types.ts';
 import { diffDays } from '../shared/dates.ts';
+import { billForPayment } from '../shared/bills.ts';
 import type { PlaidTransaction } from './plaid.ts';
 
 // Money moving between your own accounts, or paying down a card whose purchases are already counted.
@@ -85,10 +86,6 @@ export function ruleCategory(merchant: string, rules: Rule[]): string | undefine
   return rules.find((r) => !r.deleted && r.match === m)?.categoryId;
 }
 
-export function matchBill(merchant: string, bills: Bill[]): string | undefined {
-  const m = merchant.toLowerCase();
-  return bills.find((b) => !b.deleted && b.match && m.includes(b.match.trim().toLowerCase()))?.id;
-}
 
 const words = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
 
@@ -133,6 +130,8 @@ export interface MapContext {
   rules: Rule[];
   bills: Bill[];
   account?: { name: string; included: boolean };
+  /** The bank connection it came from. */
+  itemId?: string;
   /** True for a category you deleted. Anything that would land in one goes to Other. */
   categoryGone?: (id: string) => boolean;
   now: number;
@@ -152,6 +151,7 @@ export function mapPlaidTransaction(t: PlaidTransaction, ctx: MapContext): Trans
     createdAt: ctx.existing?.createdAt ?? ctx.now,
     source: 'plaid',
     plaidId: t.transaction_id,
+    itemId: ctx.itemId,
     accountId: t.account_id,
     accountName: ctx.account?.name,
     // The day you swiped, not the day it posted.
@@ -179,7 +179,8 @@ export function mapPlaidTransaction(t: PlaidTransaction, ctx: MapContext): Trans
     rec.flow = flowFor(amount, pfc?.primary, pfc?.detailed);
     rec.categoryId = ruleCategory(merchant, ctx.rules) ?? categoryFor(pfc?.primary, pfc?.detailed);
     if (ctx.categoryGone?.(rec.categoryId)) rec.categoryId = 'cat_other';
-    rec.billId = rec.flow === 'spend' && amount > 0 ? matchBill(merchant, ctx.bills) : undefined;
+    // Bills paid by transfer, like a loan payment to a credit union, count too.
+    rec.billId = rec.flow !== 'income' && amount > 0 ? billForPayment(ctx.bills, merchant, amount, t.name)?.id : undefined;
     rec.note = prev?.note;
   }
 

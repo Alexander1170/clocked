@@ -30,17 +30,18 @@ export const bankApi = {
 };
 
 /** The server's bank status, shared by every screen that shows it. */
-export const useBank = create<{ status: BankStatus | null; error: string | null; load(): Promise<void>; set(s: BankStatus): void }>()((set) => ({
+export const useBank = create<{ status: BankStatus | null; error: string | null; loadedAt: number; load(): Promise<void>; set(s: BankStatus): void }>()((set) => ({
   status: null,
   error: null,
+  loadedAt: 0,
   async load() {
     try {
-      set({ status: await bankApi.status(), error: null });
+      set({ status: await bankApi.status(), error: null, loadedAt: Date.now() });
     } catch (e) {
       set({ error: e instanceof Error ? e.message : String(e) });
     }
   },
-  set: (status) => set({ status, error: null }),
+  set: (status) => set({ status, error: null, loadedAt: Date.now() }),
 }));
 
 // ---- Plaid Link ----------------------------------------------------------------

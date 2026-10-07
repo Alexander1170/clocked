@@ -63,8 +63,10 @@ function handle(path: string, body: Record<string, unknown>) {
       fake.cursorSeen.push(cursor);
       const n = cursor ? Number(cursor.slice(1)) : 0;
       const page = fake.pages[n];
-      if (!page) return [200, { added: [], modified: [], removed: [], next_cursor: cursor || 'c0', has_more: false, accounts }] as const;
-      return [200, { ...page, next_cursor: `c${n + 1}`, has_more: n + 1 < fake.pages.length && fake.pages[n + 1] !== undefined && false, accounts }] as const;
+      if (!page) return [200, { added: [], modified: [], removed: [], next_cursor: cursor || 'c0', has_more: false, accounts: [] }] as const;
+      // Like Plaid, a page lists only the accounts with activity in it.
+      const active = new Set([...page.added, ...page.modified].map((t) => t.account_id));
+      return [200, { ...page, next_cursor: `c${n + 1}`, has_more: n + 1 < fake.pages.length && fake.pages[n + 1] !== undefined && false, accounts: accounts.filter((a) => active.has(a.account_id)) }] as const;
     }
   }
   return [404, { error_code: 'NOT_FOUND', error_message: path }] as const;
@@ -217,6 +219,16 @@ describe('bank sync against a fake Plaid', () => {
     expect(get('t6')!.categoryId).toBe('cat_phone');
   });
 
+  it('unlinks a payment once its bill no longer matches', async () => {
+    const phone = store.get('bills', 'bill_phone')!;
+    store.apply([change('bills', { ...phone, updatedAt: phone.updatedAt + 1, match: 'att' })]);
+    await bank.syncAll();
+    expect(get('t6')!.billId).toBeUndefined();
+    store.apply([change('bills', { ...phone, updatedAt: phone.updatedAt + 2 })]);
+    await bank.syncAll();
+    expect(get('t6')!.billId).toBe('bill_phone');
+  });
+
   it('files purchases for a deleted category under Other', async () => {
     store.apply([change('categories', { id: 'cat_pets', updatedAt: 5, name: 'Pets', icon: 'paw', sort: 11.5, deleted: true })]);
     fake.pages[4] = {
@@ -248,6 +260,37 @@ describe('bank sync against a fake Plaid', () => {
     expect(store.get('transactions', 'hand1')?.deleted).toBe(true);
     expect(get('t10')!.categoryId).toBe('cat_groceries');
     expect(store.get('transactions', 'hand2')?.deleted).toBeFalsy();
+  });
+
+  it('keeps a new account off once you have switched one off, and ignores closed accounts', async () => {
+    bank.setAccountIncluded('item_1', 'acc_checking', false);
+    accounts.push({ account_id: 'acc_new', name: 'Second checking', mask: '7777', type: 'depository', subtype: 'checking', balances: { current: 10 } });
+    fake.pages[6] = {
+      added: [tx('t11', { account_id: 'acc_new', amount: 20 }), tx('t12', { account_id: 'acc_closed', amount: 30 })],
+      modified: [],
+      removed: [],
+    };
+    await bank.syncItem('item_1');
+    accounts.pop();
+    bank.setAccountIncluded('item_1', 'acc_checking', true);
+    expect(bank.status().items[0].accounts.find((a) => a.id === 'acc_new')?.included).toBe(false);
+    expect(get('t11')!.accountOff).toBe(true);
+    expect(get('t12')!.accountOff).toBe(true);
+    expect(get('t1')!.accountOff).toBeUndefined();
+  });
+
+  it('keeps an account that had nothing new in a sync', async () => {
+    const second = { account_id: 'acc_second', name: 'Second checking', mask: '5555', type: 'depository', subtype: 'checking', balances: { current: 50, available: 40 } };
+    accounts.push(second);
+    fake.pages[7] = { added: [tx('t13', { account_id: 'acc_second', amount: 5 })], modified: [], removed: [] };
+    await bank.syncItem('item_1');
+    bank.setAccountIncluded('item_1', 'acc_second', true);
+    // Only the first account has anything new this time.
+    fake.pages[8] = { added: [tx('t14', { amount: 6 })], modified: [], removed: [] };
+    await bank.syncAll();
+    accounts.pop();
+    expect(bank.status().items[0].accounts.find((a) => a.id === 'acc_second')).toMatchObject({ included: true, balance: 50, available: 40 });
+    expect(get('t13')!.accountOff).toBeUndefined();
   });
 
   it('turns an account on and off', () => {

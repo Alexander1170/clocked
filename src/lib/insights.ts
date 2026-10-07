@@ -122,6 +122,16 @@ export function untilPayday(o: {
   return { free, daysLeft, perDay: free / daysLeft, start, carry };
 }
 
+/**
+ * Money free until payday, starting from what's in checking: less the bills
+ * from this paycheck that haven't come out yet, and the savings planned for it.
+ */
+export function untilPaydayFromBalance(o: { balance: number; unpaid: number; saving: number; today: LocalDate; nextPayday: LocalDate }): UntilPayday {
+  const free = o.balance - o.unpaid - o.saving;
+  const daysLeft = Math.max(1, diffDays(o.today, o.nextPayday));
+  return { free, daysLeft, perDay: free / daysLeft, start: o.balance, carry: 0 };
+}
+
 export interface StretchTotals {
   /** The check, less its bills and savings. */
   start: number;

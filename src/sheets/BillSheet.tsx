@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { Trash } from 'lucide-react';
 import type { Bill, BillFrequency, BillPaycheck } from '../../shared/types.ts';
-import { billStatus, dueDatesBetween, earningDays, nextDueOnOrAfter, payDateFor } from '../../shared/bills.ts';
+import { billStatus, dueDatesBetween, earningDays, nextDueOnOrAfter, paysBill, payDateFor } from '../../shared/bills.ts';
 import { addDays, diffDays, toLocalDate } from '../../shared/dates.ts';
 import { paycheckSlot, paydaysBetween } from '../../shared/pay.ts';
 import { useData } from '../lib/store.ts';
@@ -124,15 +124,19 @@ export function BillSheet({ id, fromTx }: { id?: string; fromTx?: string }) {
     };
     put('bills', rec);
     if (tx) put('transactions', { ...tx, billId: rec.id, edited: tx.source === 'plaid' ? true : tx.edited });
-    // Past and future payments with a matching name count as this bill.
-    const m = rec.match?.toLowerCase();
+    // Past payments with a matching name and a close amount count as this bill.
     let linked = 0;
-    if (m)
-      for (const t of txs)
-        if (!t.billId && t.amount > 0 && t.id !== tx?.id && t.merchant.toLowerCase().includes(m)) {
-          put('transactions', { ...t, billId: rec.id });
-          linked += 1;
-        }
+    for (const t of txs) {
+      if (t.edited || t.flow === 'income' || t.id === tx?.id) continue;
+      const fits = paysBill(rec, t.merchant, t.amount, t.rawName);
+      if (!t.billId && fits) {
+        put('transactions', { ...t, billId: rec.id });
+        linked += 1;
+      } else if (t.billId === rec.id && !fits) {
+        // Linked by its old bank name or amount, and no longer fits.
+        put('transactions', { ...t, billId: undefined });
+      }
+    }
     toast({
       title: `${rec.name} ${existing ? 'saved' : 'added'}`,
       detail: preview ? `${money(preview.perDay)} a ${unit}${linked ? ` · ${linked} past payments linked` : ''}` : undefined,

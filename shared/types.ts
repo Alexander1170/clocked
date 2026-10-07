@@ -116,6 +116,8 @@ export interface Transaction extends BaseRecord {
   /** The user changed this bank transaction, so later bank updates keep their category, note, and flags. */
   edited?: boolean;
   plaidId?: string;
+  /** The bank connection it came from. */
+  itemId?: string;
   accountId?: string;
   /** "Checking ••1234". */
   accountName?: string;

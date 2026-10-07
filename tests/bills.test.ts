@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Bill, DayOverride, ScheduledJob, Shift } from '../shared/types.ts';
-import { billShares, billStatus, dueDatesBetween, earningDays, payDateFor, planBills, saveWindow, upcomingPaychecks } from '../shared/bills.ts';
+import { billForPayment, billShares, billStatus, dueDatesBetween, earningDays, payDateFor, planBills, saveWindow, upcomingPaychecks } from '../shared/bills.ts';
 import { paycheckSlot } from '../shared/pay.ts';
 
 const nineToFive: Shift = { start: '08:00', end: '17:00', breakMinutes: 60, breakStart: '12:00' };
@@ -165,5 +165,31 @@ describe('bills paid from a paycheck', () => {
       ['2026-11-13', 'mid', ['phone', 'power'], 210],
       ['2026-11-27', 'end', ['net', 'rent', 'music'], 1092],
     ]);
+  });
+});
+
+describe('which bill a payment pays', () => {
+  const games = bill({ id: 'games', name: 'Game Club', amount: 9.99, match: 'Contoso' });
+  const rent = bill({ id: 'rent', name: 'Rent', amount: 1000, match: 'Withdrawal Branch' });
+  const car = bill({ id: 'car', name: 'Car app', amount: 9.99, match: 'Fabrikam Inc Subs' });
+  const video = bill({ id: 'video', name: 'Video Plus', amount: 12.99 });
+
+  it('needs the name and an amount close to the bill', () => {
+    expect(billForPayment([games], 'Contoso', 10.49, 'CONTOSO.COM/BILL')?.id).toBe('games');
+    expect(billForPayment([games], 'Contoso', 59.99, 'CONTOSO.COM/BILL')).toBeUndefined();
+    expect(billForPayment([rent], 'Withdrawal Branch', 1150, 'WITHDRAWAL BRANCH 0001')?.id).toBe('rent');
+    expect(billForPayment([rent], 'Withdrawal Branch', 300, 'WITHDRAWAL BRANCH 0001')).toBeUndefined();
+  });
+
+  it('reads words the bank ran together', () => {
+    expect(billForPayment([car], 'Fabrikam', 9.99, 'FABRIKAM, INC. SUBSDenverCO US')?.id).toBe('car');
+    // Same company and a similar amount, but a charge rather than the subscription.
+    expect(billForPayment([car], 'Fabrikam', 8.5, 'Fabrikam Inc ChargeDenverCO')).toBeUndefined();
+  });
+
+  it('falls back to the bill name, as whole words', () => {
+    expect(billForPayment([video], 'Video Plus', 12.99)?.id).toBe('video');
+    expect(billForPayment([video], 'Video', 12.99)).toBeUndefined();
+    expect(billForPayment([bill({ name: 'Rent', amount: 1000 })], 'Parent Teacher Assoc', 1000)).toBeUndefined();
   });
 });

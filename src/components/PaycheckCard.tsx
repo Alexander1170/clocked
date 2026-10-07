@@ -5,6 +5,7 @@ import type { PaycheckSlot } from '../../shared/pay.ts';
 import { diffDays } from '../../shared/dates.ts';
 import { dayLabel, money, monthShort } from '../lib/format.ts';
 import { openSheet } from '../lib/ui.ts';
+import { isPaid } from '../lib/money.ts';
 
 export const PAYCHECK_NAME: Record<PaycheckSlot, string> = {
   end: 'End-of-month paycheck',
@@ -14,10 +15,6 @@ export const PAYCHECK_NAME: Record<PaycheckSlot, string> = {
 
 /** "Oct 22". */
 export const shortDay = (d: LocalDate) => `${monthShort(Number(d.slice(5, 7)))} ${Number(d.slice(8))}`;
-
-/** Paid when a payment linked to the bill landed within two weeks of the day it was planned. */
-export const isPaid = (billId: string, pay: LocalDate, txs: readonly Transaction[]) =>
-  txs.some((t) => t.billId === billId && !t.deleted && Math.abs(diffDays(t.date, pay)) <= 13);
 
 /** "due Oct 22, 5 days late", or when a bill on its due date comes out. */
 export function payNote(b: Pick<PaycheckBill, 'pay' | 'dues'>, fromCheck: boolean): string {
