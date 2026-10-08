@@ -9,7 +9,7 @@ import { useData } from '../lib/store.ts';
 import { useBills, useCategoryMap, useCoverage, useGoals, useRules, useTransactions } from '../lib/hooks.ts';
 import { FALLBACK_CATEGORY } from '../lib/categories.ts';
 import { newId } from '../lib/ids.ts';
-import { dayLabel, minus, money, signed } from '../lib/format.ts';
+import { dayLabel, minus, money, monthDay, signed } from '../lib/format.ts';
 import { findDuplicates, notCountedReason } from '../lib/money.ts';
 import { placeRuleId, teachable } from '../lib/places.ts';
 import { markDifferent, mergePair, teachRule } from '../lib/teach.ts';
@@ -282,13 +282,20 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
                 <Gift size={15} /> {g.name}
               </button>
             ))}
-            {existing && (
-              <button onClick={() => useSheets.getState().replace({ kind: 'bill', fromTx: existing.id })} className={clsx(chip, 'border-dashed')}>
-                <Plus size={15} /> Make this a bill
-              </button>
-            )}
             {!existing && !bills.length && <p className="text-[13px] text-ink-3">Save it first, then you can turn it into a bill.</p>}
           </div>
+          {existing && (
+            <button
+              onClick={() => useSheets.getState().replace({ kind: 'bill', fromTx: existing.id })}
+              className="mt-2 flex w-full items-center gap-3 rounded-2xl border border-dashed border-line px-4 py-3 text-left transition-colors hover:bg-hover"
+            >
+              <Plus size={18} className="shrink-0 text-ink-2" />
+              <span className="min-w-0 flex-1">
+                <span className="block text-[14px] font-medium">Make it a bill</span>
+                <span className="block text-[13px] text-ink-2">Repeats on {monthDay(existing.date)} every month, starting with this one.</span>
+              </span>
+            </button>
+          )}
           {bills.length > 0 && <p className="mt-1.5 text-[13px] text-ink-3">A bill payment is covered by the bill’s set-aside, so it doesn’t count as spending.</p>}
         </>
       )}

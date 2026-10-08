@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
+import { Plus } from 'lucide-react';
 import type { Rule } from '../../shared/types.ts';
 import { bankNameOf, normName, ruleCovers } from '../../shared/rules.ts';
 import { useBillMap, useBills, useRules, useSettings, useTransactions } from '../lib/hooks.ts';
 import { groupPlaces, placeRuleId, teachable } from '../lib/places.ts';
 import { forgetRule, teachRule } from '../lib/teach.ts';
-import { dayLabel, minus, money, signed } from '../lib/format.ts';
-import { closeSheet, openSheet, toast } from '../lib/ui.ts';
+import { dayLabel, minus, money, monthDay, signed } from '../lib/format.ts';
+import { closeSheet, openSheet, toast, useSheets } from '../lib/ui.ts';
 import { Chip, Field, Sheet, Toggle } from '../components/ui.tsx';
 import { CategoryPicker } from '../components/CategoryPicker.tsx';
 
@@ -37,6 +38,8 @@ export function PlaceSheet({ placeKey }: { placeKey: string }) {
   }
 
   const moneyOut = place.txs.some((t) => t.amount > 0);
+  // The newest payment, for making this place a bill that repeats on its date.
+  const latest = place.txs.find((t) => t.amount > 0);
   const save = () => {
     const key = normName(match) || place.key;
     const rename = name.trim() && normName(name) !== normName(place.bankName) ? name.trim() : undefined;
@@ -92,10 +95,10 @@ export function PlaceSheet({ placeKey }: { placeKey: string }) {
           <CategoryPicker value={categoryId} onChange={setCategoryId} />
         </div>
 
-        {moneyOut && bills.length > 0 && (
+        {moneyOut && (
           <div>
             <span className="label">They pay a bill</span>
-            <div className="flex flex-wrap gap-2">
+            <div className={bills.length ? 'flex flex-wrap gap-2' : 'hidden'}>
               <Chip on={!billId} onClick={() => setBillId(undefined)}>
                 No
               </Chip>
@@ -105,9 +108,25 @@ export function PlaceSheet({ placeKey }: { placeKey: string }) {
                 </Chip>
               ))}
             </div>
-            <p className="mt-1.5 text-[13px] text-ink-3">
-              Every payment from here counts toward the bill, whatever the amount, so it isn’t spending. Handy for a bill you split between paychecks.
-            </p>
+            {bills.length > 0 && (
+              <p className="mt-1.5 text-[13px] text-ink-3">
+                Every payment from here counts toward the bill, whatever the amount, so it isn’t spending. Handy for a bill you split between paychecks.
+              </p>
+            )}
+            {latest && !billId && (
+              <button
+                onClick={() => useSheets.getState().replace({ kind: 'bill', fromTx: latest.id })}
+                className="mt-2 flex w-full items-center gap-3 rounded-2xl border border-dashed border-line px-4 py-3 text-left transition-colors hover:bg-hover"
+              >
+                <Plus size={18} className="shrink-0 text-ink-2" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[14px] font-medium">Make it a bill</span>
+                  <span className="block text-[13px] text-ink-2">
+                    {money(latest.amount)}, repeating on {monthDay(latest.date)} every month, starting with the one {dayLabel(latest.date)}.
+                  </span>
+                </span>
+              </button>
+            )}
           </div>
         )}
 

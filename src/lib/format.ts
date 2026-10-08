@@ -69,6 +69,19 @@ export const dowLong = (wd: number) => DOW_LONG[wd];
 export const monthShort = (m: number) => MON[m - 1];
 export const monthLong = (m: number) => MON_LONG[m - 1];
 
+/** "1st", "22nd", "13th". */
+export function ordinal(n: number): string {
+  const teen = n % 100 >= 11 && n % 100 <= 13;
+  const end = teen ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th';
+  return `${n}${end}`;
+}
+
+/** The day of the month something repeats on: "the 5th", or "the last day" for the 31st. */
+export function monthDay(d: LocalDate): string {
+  const n = Number(d.slice(8));
+  return n === 31 ? 'the last day' : `the ${ordinal(n)}`;
+}
+
 /** "Fri, Oct 2". */
 export function dayLabel(d: LocalDate): string {
   const [, m, day] = ymd(d);

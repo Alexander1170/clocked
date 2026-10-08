@@ -4,6 +4,7 @@ import { Trash } from 'lucide-react';
 import type { Bill, BillFrequency, BillPaycheck, BillPayFrom } from '../../shared/types.ts';
 import { billStatus, dueDatesBetween, earningDays, nextDueOnOrAfter, paysBill, payDateFor, payDatesFor } from '../../shared/bills.ts';
 import { addDays, diffDays, toLocalDate } from '../../shared/dates.ts';
+import { bankNameOf } from '../../shared/rules.ts';
 import { paycheckSlot, paydaysBetween } from '../../shared/pay.ts';
 import { useData } from '../lib/store.ts';
 import { isScheduled, useBills, useCategoryMap, useEngineData, useJobs, useSettings, useTransactions } from '../lib/hooks.ts';
@@ -55,8 +56,10 @@ export function BillSheet({ id, fromTx }: { id?: string; fromTx?: string }) {
     const start = existing?.categoryId ?? (tx?.categoryId && tx.categoryId !== 'cat_other' ? tx.categoryId : 'cat_bills');
     return liveCats[start] ? start : 'cat_bills';
   });
-  const [match, setMatch] = useState(existing?.match ?? tx?.merchant ?? '');
-  const [startDate, setStartDate] = useState(existing?.startDate ?? today);
+  // A bill made from a payment matches the bank's name for it, and starts with that payment, so it
+  // counts as this bill rather than spending.
+  const [match, setMatch] = useState(existing?.match ?? (tx ? bankNameOf(tx) : ''));
+  const [startDate, setStartDate] = useState(existing?.startDate ?? (tx && tx.date < today ? tx.date : today));
   const scheduled = useJobs().filter(isScheduled);
   const allBills = useBills();
   // New bills start out paid the way most of your bills are.
@@ -65,7 +68,8 @@ export function BillSheet({ id, fromTx }: { id?: string; fromTx?: string }) {
     for (const b of allBills) n[b.payFrom ?? 'due'] += 1;
     return (['mid', 'end'] as const).reduce<PayChoice>((best, k) => (n[k] > n[best] ? k : best), 'due');
   }, [allBills]);
-  const [payFrom, setPayFrom] = useState<PayChoice>(existing ? (existing.payFrom ?? 'due') : scheduled.length ? usual : 'due');
+  // One made from a payment goes out on its own date, like the payment did.
+  const [payFrom, setPayFrom] = useState<PayChoice>(existing ? (existing.payFrom ?? 'due') : tx ? 'due' : scheduled.length ? usual : 'due');
   const [lateDays, setLateDays] = useState(existing?.lateDays ?? 0);
   const [jobId, setJobId] = useState(existing?.jobId ?? scheduled[0]?.id ?? '');
   const payJob = scheduled.find((j) => j.id === jobId) ?? scheduled[0];
@@ -175,6 +179,12 @@ export function BillSheet({ id, fromTx }: { id?: string; fromTx?: string }) {
       }
     >
       <div className="space-y-5">
+        {tx && !existing && (
+          <p className="rounded-2xl bg-raised px-4 py-3 text-[14px] text-ink-2">
+            Made from your {money(Math.abs(tx.amount))} payment {dayLabel(tx.date)}. That payment counts as this bill now, not spending
+            {dueDate ? `, and the next one is due ${dayLabel(dueDate)}` : ''}.
+          </p>
+        )}
         <Field label="Name">
           <input className="input" value={name} onChange={(e) => (setName(e.target.value), setError(''))} placeholder="Rent" autoFocus={!existing && !tx} />
         </Field>
