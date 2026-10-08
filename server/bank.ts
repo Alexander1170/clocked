@@ -254,7 +254,7 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
         const replaces =
           !existing && !carryFrom
             ? findManualMatch(
-                { amount: t.amount, date: t.authorized_date || t.date, merchant: bankName, alias: ruleFor(rules, bankName)?.rename },
+                { amount: t.amount, date: t.authorized_date || t.date, merchant: bankName, alias: ruleFor(rules, bankName, t.name)?.rename },
                 handEntered.filter((x) => !matched.has(x.id)),
               )
             : undefined;
@@ -362,7 +362,7 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
       // Links you made yourself are edits, and stay put.
       if (tx.source !== 'plaid' || tx.edited || !(tx.amount > 0) || tx.flow === 'income') continue;
       const bank = bankNameOf(tx);
-      const taught = ruleFor(rules, bank)?.billId;
+      const taught = ruleFor(rules, bank, tx.rawName)?.billId;
       const cur = tx.billId ? byId.get(tx.billId) : undefined;
       let billId: string | undefined;
       if (taught && byId.get(taught) && !byId.get(taught)!.deleted) billId = taught;

@@ -1,31 +1,12 @@
 // Turns Plaid transactions into Clocked transactions: category, money flow, bill links.
-import type { Bill, LocalDate, Rule, Transaction, TxFlow } from '../shared/types.ts';
+import type { Bill, LocalDate, Rule, Transaction } from '../shared/types.ts';
 import { diffDays } from '../shared/dates.ts';
 import { billForPayment } from '../shared/bills.ts';
-import { categoryFor } from '../shared/plaidCategories.ts';
+import { categoryFor, flowFor } from '../shared/plaidCategories.ts';
 import { ruleFor, withRule } from '../shared/rules.ts';
 import type { PlaidTransaction } from './plaid.ts';
 
-export { categoryFor, MAPPED_CATEGORY_IDS } from '../shared/plaidCategories.ts';
-
-// Money moving between your own accounts, or paying down a card whose purchases are already counted.
-const TRANSFER_OUT = new Set([
-  'TRANSFER_OUT_ACCOUNT_TRANSFER',
-  'TRANSFER_OUT_SAVINGS',
-  'TRANSFER_OUT_INVESTMENT_AND_RETIREMENT_FUNDS',
-  'TRANSFER_OUT_CRYPTO',
-  'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT',
-]);
-
-export function flowFor(amount: number, primary?: string, detailed?: string): TxFlow {
-  if (amount < 0) {
-    if (primary === 'INCOME') return 'income';
-    if (primary === 'TRANSFER_IN' || primary === 'LOAN_DISBURSEMENTS') return 'transfer';
-    return 'spend'; // a refund
-  }
-  if (detailed && TRANSFER_OUT.has(detailed)) return 'transfer';
-  return 'spend';
-}
+export { categoryFor, flowFor, MAPPED_CATEGORY_IDS } from '../shared/plaidCategories.ts';
 
 const NOISE = /^(debit card purchase|pos (debit|purchase)|purchase authorized on \d\d\/\d\d|recurring (debit|payment)|checkcard \d+|sq \*|tst\*|paypal \*)\s*/i;
 
@@ -146,7 +127,7 @@ export function mapPlaidTransaction(t: PlaidTransaction, ctx: MapContext): Trans
     rec.billId = rec.flow !== 'income' && amount > 0 ? billForPayment(ctx.bills, merchant, amount, t.name)?.id : undefined;
     rec.note = prev?.note;
     // What you taught Clocked about this place: its name, category, bill, or hiding it.
-    Object.assign(rec, withRule(rec, ruleFor(ctx.rules, merchant), ctx.bills));
+    Object.assign(rec, withRule(rec, ruleFor(ctx.rules, merchant, t.name), ctx.bills));
     if (ctx.categoryGone?.(rec.categoryId)) rec.categoryId = 'cat_other';
   }
   rec.distinct = prev?.distinct;

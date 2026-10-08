@@ -37,8 +37,8 @@ export function forgetRule(id: string): number {
 }
 
 /** The rule for a bank name, or a new one keyed on it. */
-export function ruleForPlace(bankName: string): Omit<Rule, 'updatedAt'> {
-  const prior = ruleFor(live(useData.getState().t.rules), bankName);
+export function ruleForPlace(bankName: string, rawName?: string): Omit<Rule, 'updatedAt'> {
+  const prior = ruleFor(live(useData.getState().t.rules), bankName, rawName);
   if (prior) return prior;
   const key = normName(bankName);
   return { id: placeRuleId(key), match: key };
@@ -54,7 +54,7 @@ export function mergePair(d: Duplicate, renameAll: boolean): { merged: Transacti
   const merged = put('transactions', mergeDuplicate(d.bank, d.manual));
   remove('transactions', d.manual.id);
   const name = d.manual.merchant.trim();
-  const more = renameAll && name ? teachRule({ ...ruleForPlace(bankNameOf(d.bank)), rename: name, categoryId: d.manual.categoryId }, merged.id) : 0;
+  const more = renameAll && name ? teachRule({ ...ruleForPlace(bankNameOf(d.bank), d.bank.rawName), rename: name, categoryId: d.manual.categoryId }, merged.id) : 0;
   return { merged, more };
 }
 

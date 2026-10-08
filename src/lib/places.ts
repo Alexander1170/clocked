@@ -30,7 +30,7 @@ export function groupPlaces(txs: readonly Transaction[], rules: readonly Rule[],
   for (const tx of txs) {
     if (!teachable(tx, trackFrom)) continue;
     const bank = bankNameOf(tx);
-    const rule = ruleFor(rules, bank);
+    const rule = ruleFor(rules, bank, tx.rawName);
     const key = rule ? normName(rule.match) : normName(bank);
     if (!key) continue;
     let p = byKey.get(key);
@@ -75,7 +75,7 @@ export function reapplyRule(
   let n = 0;
   for (const tx of txs) {
     if (tx.deleted || !rulesApply(tx)) continue;
-    const rule = ruleFor(rules, bankNameOf(tx));
+    const rule = ruleFor(rules, bankNameOf(tx), tx.rawName);
     if (rule?.id !== ruleId && tx.ruleId !== ruleId) continue;
     const next = withRule(tx, rule, bills);
     if (!ruleFieldsDiffer(tx, next)) continue;

@@ -60,6 +60,25 @@ describe('rules for a place', () => {
     const pay = bank('i', { amount: -900, flow: 'income', merchant: 'Atm Payroll' });
     expect(withRule(pay, rule({ hide: true }), [])).toBe(pay);
   });
+
+  it('can match the start of the bank’s full description', () => {
+    const rules = [rule({ id: 'gig', match: 'pos credit 100 main street' })];
+    expect(ruleFor(rules, 'Pos Credit', 'POS CREDIT 100 Main Street Springfield')?.id).toBe('gig');
+    expect(ruleFor(rules, 'Pos Credit', 'POS CREDIT 9 Elm Road Shelbyville')).toBeUndefined();
+  });
+
+  it('count money in from a job you already log as pay, and take it back when forgotten', () => {
+    const payout = bank('d', { amount: -80, merchant: 'Gig Payout', flow: 'transfer', pfc: 'TRANSFER_IN_OTHER_TRANSFER_IN' });
+    const paid = withRule(payout, rule({ id: 'g', match: 'gig payout', jobId: 'gig', rename: 'Gig pay' }), []);
+    expect(paid).toMatchObject({ flow: 'income', jobId: 'gig', merchant: 'Gig pay', ruleSet: ['name', 'pay'] });
+    expect(notCountedReason(paid, { bills: {}, goals: {} })).toBe('Pay you already counted');
+    // A rule can change it again even though it's pay now.
+    const forgot = withRule(paid, undefined, []);
+    expect(forgot).toMatchObject({ flow: 'transfer', merchant: 'Gig Payout' });
+    expect(forgot.jobId).toBeUndefined();
+    // Money going out isn't pay.
+    expect(withRule(bank('o', { amount: 5 }), rule({ jobId: 'gig' }), []).jobId).toBeUndefined();
+  });
 });
 
 describe('places', () => {

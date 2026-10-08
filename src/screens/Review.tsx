@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
+import clsx from 'clsx';
 import { ArrowLeft, ChevronRight, CopyCheck, Search, Store } from 'lucide-react';
 import { toLocalDate } from '../../shared/dates.ts';
 import { bankNameOf, normName } from '../../shared/rules.ts';
-import { useBillMap, useCategoryMap, useRules, useSettings, useTransactions } from '../lib/hooks.ts';
+import { useBillMap, useCategoryMap, useJobMap, useRules, useSettings, useTransactions } from '../lib/hooks.ts';
 import { useData } from '../lib/store.ts';
 import { categoryIcon } from '../lib/categories.ts';
-import { dayLabel, minus, money } from '../lib/format.ts';
+import { dayLabel, minus, money, signed } from '../lib/format.ts';
 import { findDuplicates, type Duplicate } from '../lib/money.ts';
 import { groupPlaces, teachable, type Place } from '../lib/places.ts';
 import { markDifferent, mergePair } from '../lib/teach.ts';
@@ -71,11 +72,14 @@ function DuplicateRow({ d }: { d: Duplicate }) {
 function PlaceRow({ p }: { p: Place }) {
   const cats = useCategoryMap();
   const bills = useBillMap();
+  const jobs = useJobMap();
   const cat = cats[p.categoryId];
   const Icon = categoryIcon(cat?.icon);
   const billIds = new Set(p.txs.map((t) => t.billId));
   const bill = billIds.size === 1 && p.txs[0].billId ? bills[p.txs[0].billId] : undefined;
-  const sub = [p.name !== p.bankName ? p.bankName : null, cat?.name ?? 'Other', bill && !bill.deleted ? `pays ${bill.name}` : null, plural(p.txs.length, 'time')]
+  const jobIds = new Set(p.txs.map((t) => t.jobId));
+  const job = jobIds.size === 1 && p.txs[0].jobId ? jobs[p.txs[0].jobId] : undefined;
+  const sub = [p.name !== p.bankName ? p.bankName : null, job ? `pay from ${job.name}` : (cat?.name ?? 'Other'), bill && !bill.deleted ? `pays ${bill.name}` : null, plural(p.txs.length, 'time')]
     .filter(Boolean)
     .join(' · ');
   return (
@@ -87,7 +91,7 @@ function PlaceRow({ p }: { p: Place }) {
         <span className="block truncate text-[15px] font-medium">{p.name}</span>
         <span className="block truncate text-[13px] text-ink-2">{sub}</span>
       </span>
-      <span className="num shrink-0 text-[15px] font-semibold">{money(p.total)}</span>
+      <span className={clsx('num shrink-0 text-[15px] font-semibold', p.total < 0 && 'text-money')}>{p.total < 0 ? signed(-p.total) : money(p.total)}</span>
       <ChevronRight size={18} className="shrink-0 text-ink-3" />
     </button>
   );

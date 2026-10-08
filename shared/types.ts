@@ -144,7 +144,7 @@ export interface Transaction extends BaseRecord {
 export type TxFlow = 'spend' | 'income' | 'transfer';
 
 /** What a rule can set on a transaction. */
-export type RuleField = 'name' | 'category' | 'hide' | 'bill';
+export type RuleField = 'name' | 'category' | 'hide' | 'bill' | 'pay';
 
 export interface Category extends BaseRecord {
   name: string;
@@ -155,7 +155,8 @@ export interface Category extends BaseRecord {
 /**
  * What you taught Clocked about a place your bank transactions come from. It
  * covers the bank name, and longer ones that start with it ("ATM" covers
- * "ATM Main St"), past and future.
+ * "ATM Main St"), past and future. It can also match the start of the bank's
+ * full description, to tell apart places the bank gives the same short name.
  */
 export interface Rule extends BaseRecord {
   /** Lowercased bank name. */
@@ -168,6 +169,8 @@ export interface Rule extends BaseRecord {
   hide?: boolean;
   /** They pay this bill, whatever the amount. */
   billId?: string;
+  /** Money in from here is pay from this job, already counted when you logged it, so it doesn't count twice. */
+  jobId?: string;
 }
 
 export type BillFrequency = 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'yearly';

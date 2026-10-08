@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
+import clsx from 'clsx';
 import { Plus } from 'lucide-react';
 import type { Rule } from '../../shared/types.ts';
 import { bankNameOf, normName, ruleCovers } from '../../shared/rules.ts';
-import { useBillMap, useBills, useRules, useSettings, useTransactions } from '../lib/hooks.ts';
+import { useBillMap, useBills, useJobs, useRules, useSettings, useTransactions } from '../lib/hooks.ts';
 import { groupPlaces, placeRuleId, teachable } from '../lib/places.ts';
 import { forgetRule, teachRule } from '../lib/teach.ts';
 import { dayLabel, minus, money, monthDay, signed } from '../lib/format.ts';
@@ -18,6 +19,7 @@ export function PlaceSheet({ placeKey }: { placeKey: string }) {
   const rules = useRules();
   const bills = useBills();
   const billMap = useBillMap();
+  const jobs = useJobs();
   const { trackFrom } = useSettings();
   const place = useMemo(() => groupPlaces(txs, rules, trackFrom).find((p) => p.key === placeKey), [txs, rules, trackFrom, placeKey]);
   const rule = place?.rule;
@@ -26,8 +28,12 @@ export function PlaceSheet({ placeKey }: { placeKey: string }) {
   const [categoryId, setCategoryId] = useState(rule?.categoryId ?? place?.categoryId ?? '');
   const [billId, setBillId] = useState<string | undefined>(rule?.billId);
   const [hide, setHide] = useState(!!rule?.hide);
+  const [jobId, setJobId] = useState<string | undefined>(rule?.jobId);
   const [match, setMatch] = useState(rule?.match ?? place?.bankName ?? '');
-  const covers = useMemo(() => (normName(match) ? txs.filter((t) => teachable(t, trackFrom) && ruleCovers({ match }, bankNameOf(t))).length : 0), [txs, trackFrom, match]);
+  const covers = useMemo(
+    () => (normName(match) ? txs.filter((t) => teachable(t, trackFrom) && (ruleCovers({ match }, bankNameOf(t)) || (!!t.rawName && ruleCovers({ match }, t.rawName)))).length : 0),
+    [txs, trackFrom, match],
+  );
 
   if (!place) {
     return (
@@ -38,6 +44,7 @@ export function PlaceSheet({ placeKey }: { placeKey: string }) {
   }
 
   const moneyOut = place.txs.some((t) => t.amount > 0);
+  const moneyIn = place.txs.some((t) => t.amount < 0);
   // The newest payment, for making this place a bill that repeats on its date.
   const latest = place.txs.find((t) => t.amount > 0);
   const save = () => {
@@ -51,6 +58,7 @@ export function PlaceSheet({ placeKey }: { placeKey: string }) {
       categoryId: categoryId || undefined,
       hide: hide || undefined,
       billId: moneyOut ? billId : undefined,
+      jobId: moneyIn ? jobId : undefined,
     };
     const n = teachRule(next);
     toast({ title: `Saved ${rename ?? place.bankName}`, detail: n ? `${plural(n, 'transaction')} updated. New ones will follow it.` : 'New ones from the bank will follow it.' });
@@ -82,7 +90,7 @@ export function PlaceSheet({ placeKey }: { placeKey: string }) {
     >
       <div className="space-y-5">
         <p className="num text-[14px] text-ink-2">
-          {plural(place.txs.length, 'transaction')} · {money(place.total)}
+          {plural(place.txs.length, 'transaction')} · {place.total < 0 ? `${signed(-place.total)} in` : money(place.total)}
           {trackFrom ? ` since ${dayLabel(trackFrom)}` : ''}. What you set here goes for all of them, and new ones from the bank.
         </p>
 
@@ -130,6 +138,25 @@ export function PlaceSheet({ placeKey }: { placeKey: string }) {
           </div>
         )}
 
+        {moneyIn && jobs.length > 0 && (
+          <div>
+            <span className="label">This is pay</span>
+            <div className="flex flex-wrap gap-2">
+              <Chip on={!jobId} onClick={() => setJobId(undefined)}>
+                No
+              </Chip>
+              {jobs.map((j) => (
+                <Chip key={j.id} on={jobId === j.id} onClick={() => setJobId(j.id)}>
+                  {j.name}
+                </Chip>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[13px] text-ink-3">
+              Money in from here is pay you already count in Clocked, like a gig app’s payout for work you logged, so it doesn’t count twice.
+            </p>
+          </div>
+        )}
+
         <label className="flex items-center justify-between gap-4 rounded-2xl bg-raised px-4 py-3">
           <span>
             <span className="block text-[15px] font-medium">Hide them</span>
@@ -138,7 +165,7 @@ export function PlaceSheet({ placeKey }: { placeKey: string }) {
           <Toggle checked={hide} onChange={setHide} label="Hide them" />
         </label>
 
-        <Field label="Bank name starts with" hint={`Covers ${plural(covers, 'transaction')}. Shorten it to catch the same place under longer names, like every ATM location.`}>
+        <Field label="Bank name starts with" hint={`Covers ${plural(covers, 'transaction')}. Shorten it to catch the same place under longer names, like every ATM location. It can also be the start of the bank’s full description, to pick out just some.`}>
           <input className="input" value={match} onChange={(e) => setMatch(e.target.value)} />
         </Field>
 
@@ -153,15 +180,19 @@ export function PlaceSheet({ placeKey }: { placeKey: string }) {
                   onClick={() => openSheet({ kind: 'expense', id: t.id })}
                   className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left text-[14px] transition-colors hover:bg-hover"
                 >
-                  <span className="min-w-0 flex-1 truncate">
-                    {dayLabel(t.date)}
-                    <span className="text-ink-2">
-                      {bankNameOf(t) !== place.bankName && ` · ${bankNameOf(t)}`}
-                      {bill && !bill.deleted && ` · ${bill.name}${t.billPart ? ' (part)' : ''}`}
-                      {t.hidden && ' · Hidden'}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">
+                      {dayLabel(t.date)}
+                      <span className="text-ink-2">
+                        {bankNameOf(t) !== place.bankName && ` · ${bankNameOf(t)}`}
+                        {bill && !bill.deleted && ` · ${bill.name}${t.billPart ? ' (part)' : ''}`}
+                        {t.jobId && ' · pay'}
+                        {t.hidden && ' · Hidden'}
+                      </span>
                     </span>
+                    {t.rawName && <span className="block truncate text-[12px] text-ink-3">{t.rawName}</span>}
                   </span>
-                  <span className="num shrink-0 font-semibold">{t.amount < 0 ? signed(-t.amount) : minus(t.amount)}</span>
+                  <span className={clsx('num shrink-0 font-semibold', t.amount < 0 && 'text-money')}>{t.amount < 0 ? signed(-t.amount) : minus(t.amount)}</span>
                 </button>
               );
             })}

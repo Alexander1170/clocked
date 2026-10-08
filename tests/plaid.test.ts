@@ -323,6 +323,23 @@ describe('bank sync against a fake Plaid', () => {
     expect(get('t17')!.billId).toBe('bill_gym');
   });
 
+  it('counts a gig payout as pay you already logged, matched by its full description', async () => {
+    store.apply([change('rules', { id: 'rule_payout', updatedAt: 1, match: 'pos credit 100 main street', jobId: 'job_gig', rename: 'Gig payout' })]);
+    fake.pages[10] = {
+      added: [
+        tx('t19', { amount: -64.5, merchant_name: null, name: 'POS CREDIT 100 Main Street Springfield', personal_finance_category: { primary: 'OTHER', detailed: 'OTHER_OTHER' } }),
+        tx('t20', { amount: -12, merchant_name: null, name: 'POS CREDIT 9 Elm Road Shelbyville', personal_finance_category: { primary: 'OTHER', detailed: 'OTHER_OTHER' } }),
+      ],
+      modified: [],
+      removed: [],
+    };
+    await bank.syncItem('item_1');
+    expect(get('t19')).toMatchObject({ flow: 'income', jobId: 'job_gig', merchant: 'Gig payout', ruleSet: ['name', 'pay'] });
+    // Same short name, different description: a refund, not pay.
+    expect(get('t20')).toMatchObject({ flow: 'spend' });
+    expect(get('t20')!.jobId).toBeUndefined();
+  });
+
   it('turns an account on and off', () => {
     bank.setAccountIncluded('item_1', 'acc_loan', true);
     expect(get('t4')!.accountOff).toBeUndefined();

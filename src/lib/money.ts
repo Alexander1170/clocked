@@ -27,7 +27,7 @@ export function notCountedReason(tx: Transaction, { bills, goals, trackFrom }: C
   if (tx.hidden) return 'Hidden';
   if (beforeTracking(tx, trackFrom)) return 'From before you started tracking';
   if (tx.excluded) return 'Left out of spending';
-  if (tx.jobId) return 'Paycheck, already counted hourly';
+  if (tx.jobId) return 'Pay you already counted';
   if (tx.flow === 'income') return 'Deposit, already counted as pay';
   if (tx.flow === 'transfer') return 'Transfer between accounts';
   if (tx.billId) {

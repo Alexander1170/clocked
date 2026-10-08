@@ -35,7 +35,7 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
   // A bank transaction can teach its place: what you call it and how it's filed carries to the rest.
   const bankName = existing && fromBank ? bankNameOf(existing) : '';
   const canRule = !!existing && rulesApply(existing);
-  const placeRule = canRule ? ruleFor(rules, bankName) : undefined;
+  const placeRule = canRule ? ruleFor(rules, bankName, existing?.rawName) : undefined;
 
   const [amount, setAmount] = useState(existing ? String(Math.abs(existing.amount)) : '');
   const [direction, setDirection] = useState<'out' | 'in'>(existing && existing.amount < 0 ? 'in' : 'out');

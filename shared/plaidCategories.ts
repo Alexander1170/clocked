@@ -1,4 +1,30 @@
-// Plaid's spending categories, mapped onto ours.
+// Plaid's spending categories, mapped onto ours, and what kind of money each one is.
+import type { TxFlow } from './types.ts';
+
+// Money moving between your own accounts, or paying down a card whose purchases are already counted.
+const TRANSFER_OUT = new Set([
+  'TRANSFER_OUT_ACCOUNT_TRANSFER',
+  'TRANSFER_OUT_SAVINGS',
+  'TRANSFER_OUT_INVESTMENT_AND_RETIREMENT_FUNDS',
+  'TRANSFER_OUT_CRYPTO',
+  'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT',
+]);
+
+export function flowFor(amount: number, primary?: string, detailed?: string): TxFlow {
+  if (amount < 0) {
+    if (primary === 'INCOME') return 'income';
+    if (primary === 'TRANSFER_IN' || primary === 'LOAN_DISBURSEMENTS') return 'transfer';
+    return 'spend'; // a refund
+  }
+  if (detailed && TRANSFER_OUT.has(detailed)) return 'transfer';
+  return 'spend';
+}
+
+/** The kind of money from Plaid's detailed category alone. Its primary category is the start of it. */
+export function flowForDetailed(amount: number, detailed?: string): TxFlow {
+  const primary = ['INCOME', 'TRANSFER_IN', 'LOAN_DISBURSEMENTS'].find((p) => detailed?.startsWith(`${p}_`));
+  return flowFor(amount, primary, detailed);
+}
 
 const BY_DETAILED: Record<string, string> = {
   FOOD_AND_DRINK_GROCERIES: 'cat_groceries',
