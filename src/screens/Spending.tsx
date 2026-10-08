@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { ChevronLeft, ChevronRight, CircleAlert, CopyCheck, Landmark, PiggyBank, Plus, Receipt, RefreshCw, Store } from 'lucide-react';
-import type { LocalDate, Transaction } from '../../shared/types.ts';
+import type { Bill, LocalDate, Transaction } from '../../shared/types.ts';
 import { buildSegments, tally } from '../../shared/accrual.ts';
 import type { SetAsideKind } from '../../shared/plan.ts';
 import { toLocalDate } from '../../shared/dates.ts';
@@ -59,6 +59,25 @@ function TxRow({ tx }: { tx: Transaction }) {
       <span className={clsx('num shrink-0 text-[15px] font-semibold', reason ? 'text-ink-3' : tx.amount < 0 && 'text-money')}>
         {tx.amount < 0 ? signed(-tx.amount) : minus(tx.amount)}
       </span>
+    </button>
+  );
+}
+
+/** A payment the bank made toward one of your bills. */
+function BillPaidRow({ tx, bill }: { tx: Transaction; bill: Bill }) {
+  return (
+    <button onClick={() => openSheet({ kind: 'expense', id: tx.id })} className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-hover">
+      <span className="grid size-10 shrink-0 place-items-center rounded-full bg-raised text-money">
+        <PiggyBank size={18} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[15px] font-medium">{bill.name}</span>
+        <span className="block truncate text-[13px] text-ink-2">
+          {dayLabel(tx.date)} · {tx.merchant}
+          {tx.billPart && ' · part'}
+        </span>
+      </span>
+      <span className="num shrink-0 text-[15px] font-semibold text-ink-3">{minus(tx.amount)}</span>
     </button>
   );
 }
@@ -124,6 +143,7 @@ export function Spending() {
   const catOf = useCategoryOf();
   const data = useEngineData();
   const counts = useSpendCheck();
+  const billMap = useBillMap();
   const [range, setRange] = useState<Range>('week');
   const [mode, setMode] = useState<ChartMode>('left');
   const [anchor, setAnchor] = useState<LocalDate>(today);
@@ -210,9 +230,16 @@ export function Spending() {
   const listTo = listBucket ? toLocalDate(listBucket.end - 1) : to;
   const oneDay = listFrom === listTo ? listFrom : undefined;
   const counted = (tx: Transaction) => counts(tx) && (!catFilter || catOf(tx.categoryId) === catFilter);
-  const listed = txs
+  const shown = txs
     .filter((tx) => isShown(tx, trackFrom) && tx.date >= listFrom && tx.date <= listTo && (!catFilter || catOf(tx.categoryId) === catFilter))
     .sort((a, b) => b.date.localeCompare(a.date) || (b.at ?? 0) - (a.at ?? 0));
+  // Bill payments aren't spending: their set-asides cover them, so they're listed apart.
+  const paidBill = (tx: Transaction) => {
+    const b = tx.billId ? billMap[tx.billId] : undefined;
+    return b && !b.deleted && tx.date >= b.startDate ? b : undefined;
+  };
+  const listed = shown.filter((tx) => !paidBill(tx));
+  const billsPaid = shown.filter((tx) => paidBill(tx));
   const groups = new Map<LocalDate, Transaction[]>();
   for (const tx of listed) groups.set(tx.date, [...(groups.get(tx.date) ?? []), tx]);
   const dayHeading = (d: LocalDate) => (relativeDay(d, today) === dayLabel(d) ? dayLabel(d) : `${relativeDay(d, today)} · ${dayLabel(d)}`);
@@ -396,6 +423,18 @@ export function Spending() {
               ))
             )}
           </Card>
+
+          {billsPaid.length > 0 && (
+            <>
+              <SectionTitle>Bills paid</SectionTitle>
+              <Card className="divide-y divide-line overflow-hidden">
+                {billsPaid.map((tx) => (
+                  <BillPaidRow key={tx.id} tx={tx} bill={paidBill(tx)!} />
+                ))}
+              </Card>
+              <p className="mt-2 px-1 text-[13px] text-ink-3">Their set-asides cover these, so they aren’t spending. Tap one if it isn’t a bill payment.</p>
+            </>
+          )}
         </div>
 
         <div>

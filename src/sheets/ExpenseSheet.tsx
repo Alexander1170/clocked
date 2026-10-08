@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import { CopyCheck, Eye, EyeOff, Gift, Landmark, PiggyBank, Plus, Trash } from 'lucide-react';
 import type { LocalDate, Rule, RuleField, Transaction } from '../../shared/types.ts';
 import { at, hhmm, toLocalDate } from '../../shared/dates.ts';
+import { paysBill } from '../../shared/bills.ts';
 import { bankNameOf, normName, releaseFromRule, ruleCovers, ruleFor, rulesApply } from '../../shared/rules.ts';
 import { useData } from '../lib/store.ts';
 import { useBills, useCategoryMap, useCoverage, useGoals, useRules, useTransactions } from '../lib/hooks.ts';
@@ -150,17 +151,29 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
     rec = put('transactions', rec);
 
     let more = 0;
-    if (offerTeach && teach && teachKey) {
+    const taught = offerTeach && teach && !!teachKey;
+    if (taught) {
       more = teachPlace(rec, {
         categoryId: cat,
         rename: nameChanged ? (name && normName(name) !== normName(bankName) ? name : null) : undefined,
         billId: billChanged ? (billId ?? null) : undefined,
       });
     }
-    toast({
-      title: `${existing ? 'Updated' : 'Added'} ${rec.amount < 0 ? signed(amt) : minus(amt)}`,
-      detail: more ? `And ${plural(more, 'more')} from ${canRule ? bankName : rec.merchant}` : rec.merchant || undefined,
-    });
+    const place = canRule ? bankName : rec.merchant;
+    const bill = billId ? billMap[billId] : undefined;
+    if (billChanged && bill) {
+      toast({
+        title: `Marked as ${bill.name}`,
+        detail: taught ? `${more ? `And ${plural(more, 'more')} from ${place}. ` : ''}New ones from ${place} will be too.` : 'It isn’t spending anymore.',
+      });
+    } else if (billChanged) {
+      toast({ title: 'Not a bill payment', detail: 'It counts as spending again.' });
+    } else {
+      toast({
+        title: `${existing ? 'Updated' : 'Added'} ${rec.amount < 0 ? signed(amt) : minus(amt)}`,
+        detail: more ? `And ${plural(more, 'more')} from ${place}` : rec.merchant || undefined,
+      });
+    }
     closeSheet();
   };
 
@@ -193,6 +206,112 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
   const paidAmount = existing ? Math.abs(existing.amount) : parseMoney(amount);
   const short = !!linked && paidAmount > 0 && paidAmount < linked.amount - 0.5;
   const other = dup && existing ? (dup.bank.id === existing.id ? dup.manual : dup.bank) : undefined;
+  const placeLabel = canRule ? bankName : name;
+
+  const pickBill = (id: string) => {
+    setBillId(id);
+    setBillPart(billMap[id]?.payFrom === 'both');
+    setGoalId(undefined);
+  };
+  // Bills this looks like: the name fits one and the amount is close. A close amount alone isn't enough;
+  // plenty of lunches cost about what a subscription does.
+  const likely = isMoneyOut && !linked && !linkedGoal ? bills.filter((b) => paysBill(b, fromBank ? bankName : name, paidAmount, existing?.rawName)).slice(0, 2) : [];
+  const chip = 'inline-flex h-9 items-center gap-1.5 rounded-full border border-line px-3 text-[14px] font-medium text-ink-2 transition-colors hover:text-ink';
+
+  const billBlock = isMoneyOut && (
+    <div>
+      <span className="label">{linked ? 'Bill payment' : linkedGoal ? 'Paid for' : 'Is this a bill?'}</span>
+      {linked ? (
+        <>
+          <div className="flex items-center gap-3 rounded-2xl bg-raised px-4 py-3">
+            <PiggyBank size={18} className="shrink-0 text-money" />
+            <span className="min-w-0 flex-1 text-[14px]">
+              <b className="font-semibold">{linked.name}</b>.{' '}
+              {day >= linked.startDate ? 'Its set-aside covers this, so it isn’t spending.' : 'Made before its set-asides started, so it still counts as spending.'}
+              {day >= linked.startDate && !billPart && Math.abs(paidAmount - linked.amount) > 0.5 && ` The bill counts the ${money(paidAmount)} you paid, not ${money(linked.amount)}.`}
+            </span>
+            <button className="shrink-0 text-[14px] font-semibold text-ink-2 hover:text-ink" onClick={() => (setBillId(undefined), setBillPart(false))}>
+              Not a bill
+            </button>
+          </div>
+          {short && linked.payFrom !== 'both' && (
+            <label className="mt-2 flex items-center justify-between gap-4 rounded-2xl bg-raised px-4 py-3">
+              <span className="text-[14px]">
+                Only part of {linked.name}
+                <span className="block text-[13px] text-ink-2">The rest comes in another payment, like from your next paycheck.</span>
+              </span>
+              <Toggle checked={billPart} onChange={setBillPart} label={`Only part of ${linked.name}`} />
+            </label>
+          )}
+        </>
+      ) : linkedGoal ? (
+        <div className="flex items-center gap-3 rounded-2xl bg-raised px-4 py-3">
+          <Gift size={18} className="shrink-0 text-ink-2" />
+          <span className="min-w-0 flex-1 text-[14px]">
+            Bought from your <b className="font-semibold">{linkedGoal.name}</b> savings, so it isn’t spending today.
+          </span>
+          <button className="shrink-0 text-[14px] font-semibold text-ink-2 hover:text-ink" onClick={() => setGoalId(undefined)}>
+            Unlink
+          </button>
+        </div>
+      ) : (
+        <>
+          {likely.map((b) => (
+            <button
+              key={b.id}
+              onClick={() => pickBill(b.id)}
+              className="mb-2 flex w-full items-center gap-3 rounded-2xl border border-line bg-raised px-4 py-3 text-left transition-colors hover:bg-hover"
+            >
+              <PiggyBank size={18} className="shrink-0 text-ink-2" />
+              <span className="min-w-0 flex-1 text-[14px]">
+                Looks like your <b className="font-semibold">{b.name}</b> bill
+              </span>
+              <span className="shrink-0 text-[14px] font-semibold">Yes, it is</span>
+            </button>
+          ))}
+          <div className="flex flex-wrap gap-2">
+            {bills
+              .filter((b) => !likely.includes(b))
+              .map((b) => (
+                <button key={b.id} onClick={() => pickBill(b.id)} className={chip}>
+                  <PiggyBank size={15} /> {b.name}
+                </button>
+              ))}
+            {goals.map((g) => (
+              <button key={g.id} onClick={() => (setGoalId(g.id), setBillId(undefined))} className={chip}>
+                <Gift size={15} /> {g.name}
+              </button>
+            ))}
+            {existing && (
+              <button onClick={() => useSheets.getState().replace({ kind: 'bill', fromTx: existing.id })} className={clsx(chip, 'border-dashed')}>
+                <Plus size={15} /> Make this a bill
+              </button>
+            )}
+            {!existing && !bills.length && <p className="text-[13px] text-ink-3">Save it first, then you can turn it into a bill.</p>}
+          </div>
+          {bills.length > 0 && <p className="mt-1.5 text-[13px] text-ink-3">A bill payment is covered by the bill’s set-aside, so it doesn’t count as spending.</p>}
+        </>
+      )}
+    </div>
+  );
+
+  const teachBox = offerTeach && teachKey && (
+    <label className="flex items-center justify-between gap-4 rounded-2xl bg-raised px-4 py-3">
+      <span className="text-[14px]">
+        {billChanged && teachBill ? `Remember this for ${placeLabel}` : `Do the same for every ${placeLabel}`}
+        <span className="block text-[13px] text-ink-2">
+          {billChanged && teachBill
+            ? `${others > 0 ? `${plural(others, 'more')} now, and new` : 'New'} ones from the bank count as ${teachBill.name}.`
+            : others > 0
+              ? `${plural(others, 'more')} now, and new ones from the bank.`
+              : 'New ones from the bank too.'}
+        </span>
+      </span>
+      <Toggle checked={teach} onChange={setTeach} label={billChanged && teachBill ? `Remember this for ${placeLabel}` : `Do the same for every ${placeLabel}`} />
+    </label>
+  );
+  // A bill link is the first question for a bank transaction, so its "remember" switch sits right under it.
+  const teachUp = fromBank && billChanged;
 
   return (
     <Sheet
@@ -283,6 +402,9 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
           </div>
         )}
 
+        {fromBank && billBlock}
+        {teachUp && teachBox}
+
         <Field label={fromBank ? 'Name' : 'Where'} hint={fromBank && name !== bankName ? `The bank calls it ${bankName}.` : undefined}>
           <input className="input" list="merchant-list" placeholder={fromBank ? bankName : 'Chipotle'} value={merchant} onChange={(e) => onMerchant(e.target.value)} />
           <datalist id="merchant-list">
@@ -297,90 +419,8 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
           <CategoryPicker value={categoryId} onChange={setCategoryId} />
         </div>
 
-        {isMoneyOut && (
-          <div>
-            <span className="label">Paid for</span>
-            {linked ? (
-              <>
-                <div className="flex items-center gap-3 rounded-2xl bg-raised px-4 py-3">
-                  <PiggyBank size={18} className="shrink-0 text-ink-2" />
-                  <span className="min-w-0 flex-1 text-[14px]">
-                    Payment for <b className="font-semibold">{linked.name}</b>.{' '}
-                    {day >= linked.startDate ? 'Its set-aside covers it, so it isn’t spending.' : 'Made before the set-asides started, so it still counts as spending.'}
-                    {day >= linked.startDate &&
-                      !billPart &&
-                      Math.abs(paidAmount - linked.amount) > 0.5 &&
-                      ` The bill counts the ${money(paidAmount)} you paid, not ${money(linked.amount)}.`}
-                  </span>
-                  <button className="text-[14px] font-semibold text-ink-2 hover:text-ink" onClick={() => (setBillId(undefined), setBillPart(false))}>
-                    Unlink
-                  </button>
-                </div>
-                {short && linked.payFrom !== 'both' && (
-                  <label className="mt-2 flex items-center justify-between gap-4 rounded-2xl bg-raised px-4 py-3">
-                    <span className="text-[14px]">
-                      Only part of {linked.name}
-                      <span className="block text-[13px] text-ink-2">The rest comes in another payment, like from your next paycheck.</span>
-                    </span>
-                    <Toggle checked={billPart} onChange={setBillPart} label={`Only part of ${linked.name}`} />
-                  </label>
-                )}
-              </>
-            ) : linkedGoal ? (
-              <div className="flex items-center gap-3 rounded-2xl bg-raised px-4 py-3">
-                <Gift size={18} className="shrink-0 text-ink-2" />
-                <span className="min-w-0 flex-1 text-[14px]">
-                  Bought from your <b className="font-semibold">{linkedGoal.name}</b> savings, so it isn’t spending today.
-                </span>
-                <button className="text-[14px] font-semibold text-ink-2 hover:text-ink" onClick={() => setGoalId(undefined)}>
-                  Unlink
-                </button>
-              </div>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {bills.map((b) => (
-                  <button
-                    key={b.id}
-                    onClick={() => (setBillId(b.id), setBillPart(b.payFrom === 'both'))}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-full border border-line px-3 text-[14px] font-medium text-ink-2 transition-colors hover:text-ink"
-                  >
-                    <PiggyBank size={15} /> {b.name}
-                  </button>
-                ))}
-                {goals.map((g) => (
-                  <button
-                    key={g.id}
-                    onClick={() => setGoalId(g.id)}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-full border border-line px-3 text-[14px] font-medium text-ink-2 transition-colors hover:text-ink"
-                  >
-                    <Gift size={15} /> {g.name}
-                  </button>
-                ))}
-                {existing && (
-                  <button
-                    onClick={() => useSheets.getState().replace({ kind: 'bill', fromTx: existing.id })}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-full border border-dashed border-line px-3 text-[14px] font-medium text-ink-2 transition-colors hover:text-ink"
-                  >
-                    <Plus size={15} /> Make this a bill
-                  </button>
-                )}
-                {!existing && !bills.length && <p className="text-[13px] text-ink-3">Save it first, then you can turn it into a bill.</p>}
-              </div>
-            )}
-          </div>
-        )}
-
-        {offerTeach && teachKey && (
-          <label className="flex items-center justify-between gap-4 rounded-2xl bg-raised px-4 py-3">
-            <span className="text-[14px]">
-              Do the same for every {canRule ? bankName : name}
-              <span className="block text-[13px] text-ink-2">
-                {others > 0 ? `${plural(others, 'more')} now, and new ones from the bank.` : 'New ones from the bank too.'}
-              </span>
-            </span>
-            <Toggle checked={teach} onChange={setTeach} label={`Do the same for every ${canRule ? bankName : name}`} />
-          </label>
-        )}
+        {!fromBank && billBlock}
+        {!teachUp && teachBox}
 
         <div className={clsx('grid gap-3', fromBank ? 'grid-cols-1' : 'grid-cols-2')}>
           {!fromBank && (
@@ -395,15 +435,18 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
         <Field label="Note (optional)">
           <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Lunch with Sam" />
         </Field>
-        <div className="flex items-center justify-between gap-4 rounded-2xl bg-raised px-4 py-3">
-          <span>
-            <span className="block text-[15px] font-medium">Count as spending</span>
-            <span className="block text-[13px] text-ink-2">
-              {existing && !counted ? (notCountedReason({ ...existing, billId, goalId }, cover) ?? 'Left out of spending') : 'Turn off for transfers between your own accounts.'}
+        {/* A bill payment or wish-list buy is already left out of spending. */}
+        {!linked && !linkedGoal && (
+          <div className="flex items-center justify-between gap-4 rounded-2xl bg-raised px-4 py-3">
+            <span>
+              <span className="block text-[15px] font-medium">Count as spending</span>
+              <span className="block text-[13px] text-ink-2">
+                {existing && !counted ? (notCountedReason({ ...existing, billId, goalId }, cover) ?? 'Left out of spending') : 'Turn off for transfers between your own accounts.'}
+              </span>
             </span>
-          </span>
-          <Toggle checked={counted} onChange={setCounted} label="Count as spending" />
-        </div>
+            <Toggle checked={counted} onChange={setCounted} label="Count as spending" />
+          </div>
+        )}
         {existing && fromBank && existing.amount < 0 && existing.flow === 'income' && (
           <p className="text-[13px] text-ink-2">
             Deposits like paychecks aren't counted: that money already showed up hour by hour. This one was {money(-existing.amount)}.

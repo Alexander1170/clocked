@@ -101,14 +101,17 @@ export function buildDayFeed({ date, segs, gigs, txs, jobs, cats, cover, now }: 
     const cat = cats[tx.categoryId];
     const when = tx.at ? clock(tx.at) : tx.pending ? 'Pending' : '';
     const muted = notCountedReason(tx, cover) ?? undefined;
+    // A bill payment reads as the bill, not as a purchase.
+    const bill = tx.billId ? cover.bills[tx.billId] : undefined;
+    const paidBill = bill && !bill.deleted && tx.date >= bill.startDate ? bill : undefined;
     items.push({
       key: tx.id,
       at: tx.at ?? d0,
       kind: tx.amount >= 0 ? 'expense' : 'refund',
-      title: tx.merchant || cat?.name || 'Expense',
-      sub: muted ?? [cat?.name ?? 'Other', when].filter(Boolean).join(' · '),
+      title: paidBill ? paidBill.name : tx.merchant || cat?.name || 'Expense',
+      sub: paidBill ? `Bill paid${tx.billPart ? ' (part)' : ''} · ${tx.merchant}` : (muted ?? [cat?.name ?? 'Other', when].filter(Boolean).join(' · ')),
       amount: -tx.amount,
-      icon: cat?.icon,
+      icon: paidBill ? (cats[paidBill.categoryId]?.icon ?? cat?.icon) : cat?.icon,
       muted,
       open: { kind: 'expense', id: tx.id },
     });
