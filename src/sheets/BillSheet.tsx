@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { Trash } from 'lucide-react';
-import type { Bill, BillFrequency, BillPaycheck } from '../../shared/types.ts';
-import { billStatus, dueDatesBetween, earningDays, nextDueOnOrAfter, paysBill, payDateFor } from '../../shared/bills.ts';
+import type { Bill, BillFrequency, BillPaycheck, BillPayFrom } from '../../shared/types.ts';
+import { billStatus, dueDatesBetween, earningDays, nextDueOnOrAfter, paysBill, payDateFor, payDatesFor } from '../../shared/bills.ts';
 import { addDays, diffDays, toLocalDate } from '../../shared/dates.ts';
 import { paycheckSlot, paydaysBetween } from '../../shared/pay.ts';
 import { useData } from '../lib/store.ts';
@@ -21,12 +21,13 @@ export const BILL_FREQUENCIES: Array<{ value: BillFrequency; label: string }> = 
   { value: 'yearly', label: 'Every year' },
 ];
 
-type PayChoice = BillPaycheck | 'due';
+type PayChoice = BillPayFrom | 'due';
 
 const PAY_CHOICES: Array<{ value: PayChoice; label: string; hint: string }> = [
   { value: 'due', label: 'On its due date', hint: 'Autopay, or whenever it’s due.' },
   { value: 'end', label: 'End-of-month paycheck', hint: 'The one on or right before the 1st.' },
   { value: 'mid', label: 'Mid-month paycheck', hint: 'The one after that.' },
+  { value: 'both', label: 'Split between both', hint: 'Half from each paycheck.' },
 ];
 
 const LATE_CHOICES = [0, 3, 5, 7, 10, 14];
@@ -60,7 +61,7 @@ export function BillSheet({ id, fromTx }: { id?: string; fromTx?: string }) {
   const allBills = useBills();
   // New bills start out paid the way most of your bills are.
   const usual = useMemo(() => {
-    const n: Record<PayChoice, number> = { due: 0, end: 0, mid: 0 };
+    const n: Record<PayChoice, number> = { due: 0, end: 0, mid: 0, both: 0 };
     for (const b of allBills) n[b.payFrom ?? 'due'] += 1;
     return (['mid', 'end'] as const).reduce<PayChoice>((best, k) => (n[k] > n[best] ? k : best), 'due');
   }, [allBills]);
@@ -70,6 +71,9 @@ export function BillSheet({ id, fromTx }: { id?: string; fromTx?: string }) {
   const payJob = scheduled.find((j) => j.id === jobId) ?? scheduled[0];
   const nextCheck = (slot: BillPaycheck) => (payJob ? paydaysBetween(payJob, today, addDays(today, 62)).find((d) => paycheckSlot(payJob, d) === slot) : undefined);
   const choices = PAY_CHOICES.filter((c) => c.value === 'due' || (payJob && (c.value === 'end' || payJob.frequency !== 'monthly')));
+  const txsForBill = existing ? txs.filter((t) => t.billId === existing.id && t.amount > 0 && !t.billPart) : [];
+  // The last time the bank showed this bill paid in one go, if it was a different amount.
+  const lastPaid = txsForBill.reduce<(typeof txs)[number] | undefined>((best, t) => (!best || t.date > best.date ? t : best), undefined);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState('');
 
@@ -210,7 +214,7 @@ export function BillSheet({ id, fromTx }: { id?: string; fromTx?: string }) {
             <div className="space-y-2">
               {choices.map((c) => {
                 const on = payFrom === c.value;
-                const next = c.value === 'due' ? undefined : nextCheck(c.value);
+                const next = c.value === 'due' || c.value === 'both' ? undefined : nextCheck(c.value);
                 return (
                   <button
                     key={c.value}
@@ -273,6 +277,17 @@ export function BillSheet({ id, fromTx }: { id?: string; fromTx?: string }) {
           </div>
         )}
 
+        {lastPaid && value > 0 && Math.abs(lastPaid.amount - value) > Math.max(1, value * 0.02) && (
+          <div className="flex items-center gap-3 rounded-2xl bg-raised px-4 py-3">
+            <span className="min-w-0 flex-1 text-[14px] text-ink-2">
+              The bank showed <b className="font-semibold text-ink">{money(lastPaid.amount)}</b> paid {dayLabel(lastPaid.date)}.
+            </span>
+            <button type="button" className="btn btn-sm btn-secondary" onClick={() => setAmount(String(lastPaid.amount))}>
+              Use {money(lastPaid.amount)}
+            </button>
+          </div>
+        )}
+
         {preview && (
           <div className="rounded-3xl border border-line p-4">
             <p className="num text-[24px] font-bold tracking-tight">
@@ -283,7 +298,8 @@ export function BillSheet({ id, fromTx }: { id?: string; fromTx?: string }) {
               {offset === 0
                 ? `Split over ${plural(preview.days, unit)} from ${dayLabel(preview.windowFrom)} until it's due ${dayLabel(preview.due)}.`
                 : `Paid ${dayLabel(preview.pay)}, ${plural(Math.abs(offset), 'day')} ${offset > 0 ? 'after' : 'before'} it's due ${dayLabel(preview.due)}. Split over ${plural(preview.days, unit)} from ${dayLabel(preview.windowFrom)} until then.`}
-              {atOnce > 1 && ` That paycheck pays ${atOnce} of these at once, because the next one comes too late.`} The payment itself won't count as spending.
+              {atOnce > 1 && ` That paycheck pays ${atOnce} of these at once, because the next one comes too late.`}
+              {draft?.payFrom === 'both' && ` Half comes out ${payDatesFor(draft, preview.due, data.jobs).map(dayLabel).join(' and half ')}.`} The payment itself won't count as spending.
             </p>
             {skipped && (
               <p className="mt-2 text-[14px] text-ink-2">

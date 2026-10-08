@@ -11,11 +11,21 @@ export type SpendCheck = (tx: Transaction) => boolean;
 export interface Coverage {
   bills: Record<string, Bill>;
   goals: Record<string, Goal>;
+  /** Bank transactions before this day don't count. */
+  trackFrom?: LocalDate;
 }
 
+/** A bank transaction from before you started tracking. */
+export const beforeTracking = (tx: Pick<Transaction, 'source' | 'date'>, trackFrom?: LocalDate) => !!trackFrom && tx.source === 'plaid' && tx.date < trackFrom;
+
+/** Whether a transaction shows in lists: not hidden, not from a switched-off account, not from before you started tracking. */
+export const isShown = (tx: Transaction, trackFrom?: LocalDate) => !tx.deleted && !tx.accountOff && !tx.hidden && !beforeTracking(tx, trackFrom);
+
 /** Why a transaction isn't counted as spending, or null if it is. */
-export function notCountedReason(tx: Transaction, { bills, goals }: Coverage): string | null {
+export function notCountedReason(tx: Transaction, { bills, goals, trackFrom }: Coverage): string | null {
   if (tx.accountOff) return 'From an account you switched off';
+  if (tx.hidden) return 'Hidden';
+  if (beforeTracking(tx, trackFrom)) return 'From before you started tracking';
   if (tx.excluded) return 'Left out of spending';
   if (tx.jobId) return 'Paycheck, already counted hourly';
   if (tx.flow === 'income') return 'Deposit, already counted as pay';
@@ -23,7 +33,7 @@ export function notCountedReason(tx: Transaction, { bills, goals }: Coverage): s
   if (tx.billId) {
     const b = bills[tx.billId];
     // Payments after the set-asides started are covered by them.
-    if (b && !b.deleted && tx.date >= b.startDate) return `Covered by ${b.name} set-asides`;
+    if (b && !b.deleted && tx.date >= b.startDate) return tx.billPart ? `Part of ${b.name}, covered by its set-asides` : `Covered by ${b.name} set-asides`;
   }
   if (tx.goalId) {
     const g = goals[tx.goalId];
@@ -191,6 +201,62 @@ export function splitDay(d: { earned: number; setAside: number; spent: number })
   };
 }
 
-/** Paid when a payment linked to the bill landed within two weeks of the day it was planned. */
-export const isPaid = (billId: string, pay: LocalDate, txs: readonly Transaction[]) =>
-  txs.some((t) => t.billId === billId && !t.deleted && Math.abs(diffDays(t.date, pay)) <= 13);
+/** A purchase you added by hand and the bank's copy of it. */
+export interface Duplicate {
+  manual: Transaction;
+  bank: Transaction;
+}
+
+/**
+ * Purchases you added by hand that look like a bank transaction: the same
+ * amount within three days, whatever the name. Each pairs up once, closest day
+ * first. Pairs you said aren't the same are left out.
+ */
+export function findDuplicates(txs: readonly Transaction[], trackFrom?: LocalDate): Duplicate[] {
+  const manual = txs.filter((t) => t.source !== 'plaid' && !t.deleted && !t.hidden);
+  const bank = txs.filter((t) => t.source === 'plaid' && isShown(t, trackFrom) && t.flow !== 'income');
+  const pairs: Array<Duplicate & { gap: number }> = [];
+  for (const m of manual) {
+    const cents = Math.round(m.amount * 100);
+    for (const b of bank) {
+      if (Math.round(b.amount * 100) !== cents) continue;
+      const gap = Math.abs(diffDays(m.date, b.date));
+      if (gap > 3 || m.distinct?.includes(b.id) || b.distinct?.includes(m.id)) continue;
+      pairs.push({ manual: m, bank: b, gap });
+    }
+  }
+  pairs.sort((a, b) => a.gap - b.gap);
+  const used = new Set<string>();
+  const out: Duplicate[] = [];
+  for (const p of pairs) {
+    if (used.has(p.manual.id) || used.has(p.bank.id)) continue;
+    used.add(p.manual.id);
+    used.add(p.bank.id);
+    out.push({ manual: p.manual, bank: p.bank });
+  }
+  return out;
+}
+
+/**
+ * The bank's copy takes the place of the one you added by hand: it keeps the
+ * bank's amount and date, and your name, category, note, and links.
+ */
+export function mergeDuplicate(bank: Transaction, manual: Transaction): Transaction {
+  const out: Transaction = {
+    ...bank,
+    categoryId: manual.categoryId,
+    note: manual.note ?? bank.note,
+    at: bank.at ?? manual.at,
+    billId: manual.billId ?? bank.billId,
+    goalId: manual.goalId ?? bank.goalId,
+    edited: true,
+  };
+  const name = manual.merchant.trim();
+  if (name && name !== bank.merchant) {
+    out.bankName = bank.bankName ?? bank.merchant;
+    out.merchant = name;
+  }
+  if (manual.excluded) out.excluded = true;
+  for (const k of Object.keys(out) as Array<keyof Transaction>) if (out[k] === undefined) delete out[k];
+  return out;
+}

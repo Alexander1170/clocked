@@ -4,9 +4,9 @@ import { planSetAsides, type SetAsidePlan } from '../../shared/plan.ts';
 import { makeSpendCheck, type Coverage, type SpendCheck } from './money.ts';
 import type { EngineData } from '../../shared/accrual.ts';
 import { addDays, toLocalDate } from '../../shared/dates.ts';
-import { upcomingPaychecks } from '../../shared/bills.ts';
+import { paidLog, upcomingPaychecks, type PaidLog } from '../../shared/bills.ts';
 import { lastPaydayOnOrBefore, nextPaydayOnOrAfter, paydaysBetween } from '../../shared/pay.ts';
-import { checkAmount, isPaid, spentBetween } from './money.ts';
+import { checkAmount, spentBetween } from './money.ts';
 import { useBank, type AccountInfo } from './bank.ts';
 import { gigPayBetween, setAsideBetween, stretchEndings, untilPayday, untilPaydayFromBalance, type UntilPayday } from './insights.ts';
 import { live, useData } from './store.ts';
@@ -130,11 +130,19 @@ export function useGoals(): Goal[] {
   return useMemo(() => live(goals).sort((a, b) => a.targetDate.localeCompare(b.targetDate)), [goals]);
 }
 
-/** Bills and goals that can cover a payment. */
+/** Bills and goals that can cover a payment, and the day bank transactions start counting. */
 export function useCoverage(): Coverage {
   const bills = useBillMap();
   const goals = useGoalMap();
-  return useMemo(() => ({ bills, goals }), [bills, goals]);
+  const { trackFrom } = useSettings();
+  return useMemo(() => ({ bills, goals, trackFrom }), [bills, goals, trackFrom]);
+}
+
+/** Bank payments linked to bills, so paid bills go by what you actually paid. */
+export function usePaidLog(): PaidLog {
+  const txs = useTransactions();
+  const today = toLocalDate(Date.now());
+  return useMemo(() => paidLog(txs, today), [txs, today]);
 }
 
 /** Decides what counts as spending (see makeSpendCheck). */
@@ -149,11 +157,12 @@ export function useSetAsidePlan(from: LocalDate, to: LocalDate): SetAsidePlan {
   const savings = useSavings();
   const goals = useGoals();
   const moves = useMoves();
+  const paid = usePaidLog();
   const data = useEngineData();
   const { billSpread } = useSettings();
   return useMemo(
-    () => planSetAsides({ bills, savings, goals, moves }, data, from, to, billSpread ?? 'workdays'),
-    [bills, savings, goals, moves, data, from, to, billSpread],
+    () => planSetAsides({ bills, savings, goals, moves, paid }, data, from, to, billSpread ?? 'workdays'),
+    [bills, savings, goals, moves, paid, data, from, to, billSpread],
   );
 }
 
@@ -176,7 +185,7 @@ export interface PaydayStretch extends UntilPayday {
    * in the counted accounts, less the bills still to come out before payday.
    * Otherwise it's worked out from the paycheck.
    */
-  fromBank: { balance: number; asOf: number; unpaid: Array<{ name: string; amount: number }> } | null;
+  fromBank: { balance: number; asOf: number; unpaid: Array<{ name: string; amount: number; part: boolean }> } | null;
 }
 
 /** A bank balance older than this is too stale to start from. */
@@ -202,6 +211,7 @@ export function useUntilPayday(now: number): PaydayStretch | null {
   const data = useEngineData();
   const txs = useTransactions();
   const counts = useSpendCheck();
+  const paid = usePaidLog();
   const job = jobs.find((j): j is ScheduledJob => isScheduled(j) && j.takeHome > 0);
   const lastPayday = job ? lastPaydayOnOrBefore(job, today) : null;
   const nextPayday = job ? nextPaydayOnOrAfter(job, addDays(today, 1)) : null;
@@ -219,9 +229,9 @@ export function useUntilPayday(now: number): PaydayStretch | null {
     // Bills come off from their start date. Before that, what you paid shows up as spending instead.
     const stretch = (payday: LocalDate, end: LocalDate, through: LocalDate) => {
       const check = checkAmount(job, data, payday, now);
-      const paid = upcomingPaychecks(job, bills, data.jobs, payday, 1)[0]?.billTotal ?? 0;
+      const billTotal = upcomingPaychecks(job, bills, data.jobs, payday, 1, false, paid)[0]?.billTotal ?? 0;
       const saving = setAsideBetween(plan, payday, end);
-      return { check, bills: paid, saving, start: check - paid - saving, gig: gigPayBetween(data.gigs, payday, through, now), spent: spentBetween(txs, payday, through, counts) };
+      return { check, bills: billTotal, saving, start: check - billTotal - saving, gig: gigPayBetween(data.gigs, payday, through, now), spent: spentBetween(txs, payday, through, counts) };
     };
     // Earlier stretches, oldest first, to see whether one ran short.
     const past = paydays.slice(0, -1).map((p, i) => stretch(p, addDays(paydays[i + 1], -1), addDays(paydays[i + 1], -1)));
@@ -248,8 +258,12 @@ export function useUntilPayday(now: number): PaydayStretch | null {
     const counted = fresh.flatMap((i) => i.accounts.filter(countable));
     if (counted.length) {
       const balance = counted.reduce((t, a) => t + (a.available ?? a.balance ?? 0), 0);
-      const check = upcomingPaychecks(job, bills, data.jobs, lastPayday, 1)[0];
-      const unpaid = (check?.bills ?? []).filter((b) => !isPaid(b.bill.id, b.pay, txs)).map((b) => ({ name: b.bill.name, amount: b.amount }));
+      const check = upcomingPaychecks(job, bills, data.jobs, lastPayday, 1, false, paid)[0];
+      // What's still to come out of the bills this paycheck pays, part payments taken off.
+      const unpaid = (check?.bills ?? [])
+        .filter((b) => !b.done)
+        .map((b) => ({ name: b.bill.name, amount: Math.max(0, b.amount - (b.paid ?? 0)), part: (b.paid ?? 0) > 0.005 }))
+        .filter((b) => b.amount > 0.005);
       // Savings stay in checking until you move them, so this stretch's still count.
       const u = untilPaydayFromBalance({ balance, unpaid: unpaid.reduce((t, b) => t + b.amount, 0), saving: cur.saving, today, nextPayday });
       return {
@@ -261,5 +275,5 @@ export function useUntilPayday(now: number): PaydayStretch | null {
       };
     }
     return { ...base, ...untilPayday({ ...cur, today, nextPayday, carry }), fromBank: null };
-  }, [job, lastPayday, nextPayday, paydays, data, now, bills, plan, txs, counts, today, bank]);
+  }, [job, lastPayday, nextPayday, paydays, data, now, bills, plan, txs, counts, today, bank, paid]);
 }

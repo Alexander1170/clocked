@@ -1,11 +1,10 @@
-import { Circle, CircleCheck } from 'lucide-react';
-import type { LocalDate, Transaction } from '../../shared/types.ts';
+import { Circle, CircleCheck, CircleDashed } from 'lucide-react';
+import type { LocalDate } from '../../shared/types.ts';
 import type { Paycheck, PaycheckBill } from '../../shared/bills.ts';
 import type { PaycheckSlot } from '../../shared/pay.ts';
 import { diffDays } from '../../shared/dates.ts';
 import { dayLabel, money, monthShort } from '../lib/format.ts';
 import { openSheet } from '../lib/ui.ts';
-import { isPaid } from '../lib/money.ts';
 
 export const PAYCHECK_NAME: Record<PaycheckSlot, string> = {
   end: 'End-of-month paycheck',
@@ -16,17 +15,18 @@ export const PAYCHECK_NAME: Record<PaycheckSlot, string> = {
 /** "Oct 22". */
 export const shortDay = (d: LocalDate) => `${monthShort(Number(d.slice(5, 7)))} ${Number(d.slice(8))}`;
 
-/** "due Oct 22, 5 days late", or when a bill on its due date comes out. */
-export function payNote(b: Pick<PaycheckBill, 'pay' | 'dues'>, fromCheck: boolean): string {
+/** "due Oct 22, 5 days late", or when a bill on its due date comes out. A split bill says which half. */
+export function payNote(b: Pick<PaycheckBill, 'pay' | 'dues' | 'share'>, fromCheck: boolean): string {
   if (!fromCheck) return `comes out ${shortDay(b.pay)}`;
   const due = b.dues[b.dues.length - 1];
   const late = diffDays(due, b.pay);
   const dues = b.dues.map(shortDay).join(' and ');
-  return late > 0 ? `due ${dues}, ${late} ${late === 1 ? 'day' : 'days'} late` : `due ${dues}`;
+  const half = b.share < 1 ? 'half, ' : '';
+  return late > 0 ? `${half}due ${dues}, ${late} ${late === 1 ? 'day' : 'days'} late` : `${half}due ${dues}`;
 }
 
 /** One paycheck: what it pays and what's left of it. */
-export function PaycheckCard({ check, amount, today, txs, title }: { check: Paycheck; amount: number; today: LocalDate; txs: readonly Transaction[]; title?: string }) {
+export function PaycheckCard({ check, amount, today, title }: { check: Paycheck; amount: number; today: LocalDate; title?: string }) {
   const left = amount - check.billTotal;
   return (
     <div className="card p-4">
@@ -43,17 +43,28 @@ export function PaycheckCard({ check, amount, today, txs, title }: { check: Payc
         <ul className="mt-2.5 space-y-0.5">
           {check.bills.map((b) => {
             const fromCheck = b.pay === check.payday && !!b.bill.payFrom;
-            const paid = isPaid(b.bill.id, b.pay, txs);
+            const paid = !!b.done;
+            const some = !paid && (b.paid ?? 0) > 0.005;
             return (
               <li key={`${b.bill.id}|${b.pay}`}>
                 <button
                   onClick={() => openSheet({ kind: 'bill', id: b.bill.id })}
                   className="-mx-2 flex w-[calc(100%+1rem)] items-center gap-2.5 rounded-xl px-2 py-1.5 text-left text-[14px] transition-colors hover:bg-hover"
                 >
-                  {paid ? <CircleCheck size={16} aria-label="Paid" className="shrink-0 text-money" /> : <Circle size={16} aria-hidden className="shrink-0 text-ink-3" />}
+                  {paid ? (
+                    <CircleCheck size={16} aria-label="Paid" className="shrink-0 text-money" />
+                  ) : some ? (
+                    <CircleDashed size={16} aria-label="Part paid" className="shrink-0 text-money" />
+                  ) : (
+                    <Circle size={16} aria-hidden className="shrink-0 text-ink-3" />
+                  )}
                   <span className="min-w-0 flex-1 truncate">
                     <span className={paid ? 'text-ink-2' : 'font-medium'}>{b.bill.name}</span>
-                    <span className="text-[13px] text-ink-3"> · {payNote(b, fromCheck)}</span>
+                    <span className="text-[13px] text-ink-3">
+                      {' '}
+                      · {payNote(b, fromCheck)}
+                      {some && ` · ${money(b.paid ?? 0)} paid`}
+                    </span>
                   </span>
                   <span className="num shrink-0 font-semibold">{money(b.amount)}</span>
                 </button>

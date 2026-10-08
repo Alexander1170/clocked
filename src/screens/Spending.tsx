@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
-import { ChevronLeft, ChevronRight, CircleAlert, Landmark, PiggyBank, Plus, Receipt, RefreshCw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CircleAlert, CopyCheck, Landmark, PiggyBank, Plus, Receipt, RefreshCw, Store } from 'lucide-react';
 import type { LocalDate, Transaction } from '../../shared/types.ts';
 import { buildSegments, tally } from '../../shared/accrual.ts';
 import type { SetAsideKind } from '../../shared/plan.ts';
@@ -9,7 +9,7 @@ import { useBillMap, useCategories, useCategoryMap, useCategoryOf, useCoverage, 
 import { bucketIndexAt, bucketsFor, periodBounds, periodTitle, shiftAnchor, type Range } from '../lib/periods.ts';
 import { categoryIcon } from '../lib/categories.ts';
 import { clock, dayLabel, minus, money, relativeDay, signed } from '../lib/format.ts';
-import { notCountedReason, setAsideInSpans, spentInSpans } from '../lib/money.ts';
+import { findDuplicates, isShown, notCountedReason, setAsideInSpans, spentInSpans } from '../lib/money.ts';
 import { bankApi, useBank } from '../lib/bank.ts';
 import { go, openSheet, toast } from '../lib/ui.ts';
 import { BarChart, type BarDatum } from '../components/BarChart.tsx';
@@ -42,7 +42,11 @@ function TxRow({ tx }: { tx: Transaction }) {
   const Icon = categoryIcon(cat?.icon);
   const reason = notCountedReason(tx, cover);
   const bill = tx.billId ? bills[tx.billId] : undefined;
-  const sub = reason ?? [cat?.name ?? 'Other', bill && !bill.deleted ? `${bill.name} payment` : null, tx.at ? clock(tx.at) : null, tx.pending ? 'Pending' : null].filter(Boolean).join(' · ');
+  const sub =
+    reason ??
+    [cat?.name ?? 'Other', bill && !bill.deleted ? `${bill.name} payment${tx.billPart ? ' (part)' : ''}` : null, tx.at ? clock(tx.at) : null, tx.pending ? 'Pending' : null]
+      .filter(Boolean)
+      .join(' · ');
   return (
     <button onClick={() => openSheet({ kind: 'expense', id: tx.id })} className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-hover">
       <span className="grid size-10 shrink-0 place-items-center rounded-full bg-raised text-ink-2">
@@ -113,8 +117,9 @@ function BankStrip() {
 export function Spending() {
   const now = useNow(30_000);
   const today = toLocalDate(now);
-  const { weekStartsOn } = useSettings();
+  const { weekStartsOn, trackFrom } = useSettings();
   const txs = useTransactions();
+  const doubled = useMemo(() => findDuplicates(txs, trackFrom).length, [txs, trackFrom]);
   const cats = useCategories();
   const catOf = useCategoryOf();
   const data = useEngineData();
@@ -206,7 +211,7 @@ export function Spending() {
   const oneDay = listFrom === listTo ? listFrom : undefined;
   const counted = (tx: Transaction) => counts(tx) && (!catFilter || catOf(tx.categoryId) === catFilter);
   const listed = txs
-    .filter((tx) => !tx.accountOff && tx.date >= listFrom && tx.date <= listTo && (!catFilter || catOf(tx.categoryId) === catFilter))
+    .filter((tx) => isShown(tx, trackFrom) && tx.date >= listFrom && tx.date <= listTo && (!catFilter || catOf(tx.categoryId) === catFilter))
     .sort((a, b) => b.date.localeCompare(a.date) || (b.at ?? 0) - (a.at ?? 0));
   const groups = new Map<LocalDate, Transaction[]>();
   for (const tx of listed) groups.set(tx.date, [...(groups.get(tx.date) ?? []), tx]);
@@ -352,6 +357,15 @@ export function Spending() {
           >
             {listTitle}
           </SectionTitle>
+          {doubled > 0 && (
+            <button onClick={() => go('review')} className="mb-3 flex w-full items-center gap-3 rounded-3xl border border-line p-4 text-left transition-colors hover:bg-hover">
+              <CopyCheck size={18} className="shrink-0 text-ink-2" />
+              <span className="min-w-0 flex-1 text-[14px]">
+                {doubled === 1 ? 'One purchase looks like it’s in here twice' : `${doubled} purchases look like they’re in here twice`}: once from the bank, once added by hand.
+              </span>
+              <span className="shrink-0 text-[14px] font-semibold">Review</span>
+            </button>
+          )}
           <Card className="overflow-hidden">
             {listed.length === 0 ? (
               <EmptyState
@@ -388,6 +402,14 @@ export function Spending() {
           <div className="mt-8 lg:mt-0">
             <BankStrip />
           </div>
+          <button onClick={() => go('review')} className="mt-3 flex w-full items-center gap-3 rounded-3xl border border-line p-4 text-left transition-colors hover:bg-hover">
+            <Store size={18} className="shrink-0 text-ink-2" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[15px] font-semibold">Bank transactions</span>
+              <span className="block text-[13px] text-ink-2">Rename, hide, or tie them to bills</span>
+            </span>
+            <ChevronRight size={18} className="shrink-0 text-ink-3" />
+          </button>
           <SectionTitle>By category</SectionTitle>
           <Card className="p-2">
             {byCat.length === 0 ? (

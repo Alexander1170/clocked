@@ -1,5 +1,5 @@
 import type { Category, GigSession, Job, LocalDate, Transaction } from '../../shared/types.ts';
-import { notCountedReason, type Coverage } from './money.ts';
+import { isShown, notCountedReason, type Coverage } from './money.ts';
 import { hourlyChunks, valueIn, type Segment } from '../../shared/accrual.ts';
 import { dayEnd, dayStart, toLocalDate } from '../../shared/dates.ts';
 import { clock, hrs, timeRange } from './format.ts';
@@ -97,7 +97,7 @@ export function buildDayFeed({ date, segs, gigs, txs, jobs, cats, cover, now }: 
   }
 
   for (const tx of txs) {
-    if (tx.deleted || tx.accountOff || tx.date !== date) continue;
+    if (!isShown(tx, cover.trackFrom) || tx.date !== date) continue;
     const cat = cats[tx.categoryId];
     const when = tx.at ? clock(tx.at) : tx.pending ? 'Pending' : '';
     const muted = notCountedReason(tx, cover) ?? undefined;

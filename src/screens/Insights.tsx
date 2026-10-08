@@ -18,6 +18,7 @@ import {
   useSetAsidePlan,
   useSettings,
   useSpendCheck,
+  usePaidLog,
   useTransactions,
   useUntilPayday,
 } from '../lib/hooks.ts';
@@ -98,6 +99,7 @@ export function Insights() {
   const bills = useBills();
   const savings = useSavings();
   const txs = useTransactions();
+  const paid = usePaidLog();
   const cats = useCategoryMap();
   const catOf = useCategoryOf();
   const counts = useSpendCheck();
@@ -117,12 +119,12 @@ export function Insights() {
     const paydays = job ? paydaysBetween(job, monthFrom, monthTo) : [];
     const checks = job ? paydays.reduce((t, p) => t + checkAmount(job, data, p, now), 0) : 0;
     const gig = gigPayBetween(data.gigs, monthFrom, monthTo, now);
-    const billTotal = job && paydays.length ? upcomingPaychecks(job, bills, data.jobs, monthFrom, paydays.length).reduce((t, c) => t + c.billTotal, 0) : 0;
+    const billTotal = job && paydays.length ? upcomingPaychecks(job, bills, data.jobs, monthFrom, paydays.length, false, paid).reduce((t, c) => t + c.billTotal, 0) : 0;
     const saving = setAsideBetween(monthPlan, monthFrom, monthTo);
     const spent = spentBetween(txs, monthFrom, monthTo, counts);
     const pay = checks + gig;
     return { paydays: paydays.length, pay, bills: billTotal, saving, spent, ...monthSplit({ pay, bills: billTotal, saving, spent }) };
-  }, [job, monthFrom, monthTo, data, now, bills, monthPlan, txs, counts]);
+  }, [job, monthFrom, monthTo, data, now, bills, monthPlan, txs, counts, paid]);
 
   // ---- Averages for suggestions --------------------------------------------
   const takeHome = monthlyTakeHome(jobs);

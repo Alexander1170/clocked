@@ -5,6 +5,7 @@ import type { Store } from './db.ts';
 import { plaidClient, PlaidError, type PlaidAccount, type PlaidClient, type PlaidEnv, type PlaidTransaction } from './plaid.ts';
 import { cleanName, findManualMatch, mapPlaidTransaction } from './categorize.ts';
 import { billForPayment, paysBill } from '../shared/bills.ts';
+import { bankNameOf, ruleFor } from '../shared/rules.ts';
 import type { Change, Transaction } from '../shared/types.ts';
 
 const DAYS_REQUESTED = 180;
@@ -249,10 +250,11 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
         const existing = store.get('transactions', `plaid_${t.transaction_id}`);
         let carryFrom = !existing && t.pending_transaction_id ? store.get('transactions', `plaid_${t.pending_transaction_id}`) : undefined;
         // The bank's copy of something you already added takes its place, keeping your category and note.
+        const bankName = (t.merchant_name || cleanName(t.name) || t.name).trim();
         const replaces =
           !existing && !carryFrom
             ? findManualMatch(
-                { amount: t.amount, date: t.authorized_date || t.date, merchant: (t.merchant_name || cleanName(t.name) || t.name).trim() },
+                { amount: t.amount, date: t.authorized_date || t.date, merchant: bankName, alias: ruleFor(rules, bankName)?.rename },
                 handEntered.filter((x) => !matched.has(x.id)),
               )
             : undefined;
@@ -345,20 +347,28 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
     linkBillPayments();
   }
 
-  /** Links bank payments to the bills they pay, for ones not linked yet that you haven't edited. */
+  /**
+   * Links bank payments to the bills they pay, for ones you haven't edited: the
+   * bill you said a place pays, or one whose bank name and amount fit.
+   */
   function linkBillPayments() {
     const bills = store.all('bills');
     if (!bills.length) return;
+    const rules = store.all('rules');
     const now = Date.now();
     const changes: Change[] = [];
     const byId = new Map(bills.map((b) => [b.id, b]));
     for (const tx of store.all('transactions')) {
       // Links you made yourself are edits, and stay put.
       if (tx.source !== 'plaid' || tx.edited || !(tx.amount > 0) || tx.flow === 'income') continue;
+      const bank = bankNameOf(tx);
+      const taught = ruleFor(rules, bank)?.billId;
       const cur = tx.billId ? byId.get(tx.billId) : undefined;
-      if (cur && paysBill(cur, tx.merchant, tx.amount, tx.rawName)) continue;
+      let billId: string | undefined;
+      if (taught && byId.get(taught) && !byId.get(taught)!.deleted) billId = taught;
+      else if (cur && paysBill(cur, bank, tx.amount, tx.rawName)) continue;
       // Unlinked, or linked to a bill it no longer fits (its bank name changed, or it was deleted).
-      const billId = billForPayment(bills, tx.merchant, tx.amount, tx.rawName)?.id;
+      else billId = billForPayment(bills, bank, tx.amount, tx.rawName)?.id;
       if (billId === tx.billId) continue;
       const rec: Transaction = { ...tx, updatedAt: Math.max(now, tx.updatedAt + 1) };
       if (billId) rec.billId = billId;

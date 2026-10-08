@@ -1,20 +1,23 @@
 import { useMemo, useState } from 'react';
 import clsx from 'clsx';
-import { Gift, Landmark, PiggyBank, Plus, Trash } from 'lucide-react';
-import type { LocalDate, Rule, Transaction } from '../../shared/types.ts';
+import { CopyCheck, Eye, EyeOff, Gift, Landmark, PiggyBank, Plus, Trash } from 'lucide-react';
+import type { LocalDate, Rule, RuleField, Transaction } from '../../shared/types.ts';
 import { at, hhmm, toLocalDate } from '../../shared/dates.ts';
+import { bankNameOf, normName, releaseFromRule, ruleCovers, ruleFor, rulesApply } from '../../shared/rules.ts';
 import { useData } from '../lib/store.ts';
-import { useBills, useCategoryMap, useCoverage, useGoals, useTransactions } from '../lib/hooks.ts';
+import { useBills, useCategoryMap, useCoverage, useGoals, useRules, useTransactions } from '../lib/hooks.ts';
 import { FALLBACK_CATEGORY } from '../lib/categories.ts';
 import { newId } from '../lib/ids.ts';
 import { dayLabel, minus, money, signed } from '../lib/format.ts';
-import { notCountedReason } from '../lib/money.ts';
+import { findDuplicates, notCountedReason } from '../lib/money.ts';
+import { placeRuleId, teachable } from '../lib/places.ts';
+import { markDifferent, mergePair, teachRule } from '../lib/teach.ts';
 import { closeSheet, toast, useSheets } from '../lib/ui.ts';
 import { Field, MoneyInput, parseMoney, Segmented, Sheet, Toggle } from '../components/ui.tsx';
 import { CategoryPicker } from '../components/CategoryPicker.tsx';
 
 const timeOf = (t: number) => hhmm(new Date(t).getHours() * 60 + new Date(t).getMinutes());
-const ruleId = (merchant: string) => `rule_${merchant.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+const plural = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
 
 export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
   const existing = useData((s) => (id ? s.t.transactions[id] : undefined));
@@ -22,11 +25,16 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
   const remove = useData((s) => s.remove);
   const txs = useTransactions();
   const bills = useBills();
+  const rules = useRules();
   const goals = useGoals().filter((g) => g.items.some((i) => !i.boughtOn) || g.id === existing?.goalId);
   const cover = useCoverage();
   const billMap = cover.bills;
   const today = toLocalDate(Date.now());
   const fromBank = existing?.source === 'plaid';
+  // A bank transaction can teach its place: what you call it and how it's filed carries to the rest.
+  const bankName = existing && fromBank ? bankNameOf(existing) : '';
+  const canRule = !!existing && rulesApply(existing);
+  const placeRule = canRule ? ruleFor(rules, bankName) : undefined;
 
   const [amount, setAmount] = useState(existing ? String(Math.abs(existing.amount)) : '');
   const [direction, setDirection] = useState<'out' | 'in'>(existing && existing.amount < 0 ? 'in' : 'out');
@@ -39,14 +47,34 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
   const [note, setNote] = useState(existing?.note ?? '');
   const [counted, setCounted] = useState(existing ? !existing.excluded && (existing.flow ?? 'spend') === 'spend' : true);
   const [billId, setBillId] = useState<string | undefined>(existing?.billId);
+  const [billPart, setBillPart] = useState(!!existing?.billPart);
   const [goalId, setGoalId] = useState<string | undefined>(existing?.goalId);
-  const [always, setAlways] = useState(true);
+  const [teachPick, setTeach] = useState<boolean | null>(null);
+  const [mergeName, setMergeName] = useState(false);
   const [error, setError] = useState('');
 
+  const name = merchant.trim();
   const categoryChanged = !!existing && !!categoryId && categoryId !== existing.categoryId;
-  const others = useMemo(
-    () => txs.filter((t) => t.id !== existing?.id && !t.edited && t.merchant.trim().toLowerCase() === merchant.trim().toLowerCase()).length,
-    [txs, existing?.id, merchant],
+  const nameChanged = canRule && !!existing && (name || bankName) !== existing.merchant;
+  const billChanged = canRule && billId !== existing?.billId;
+  // The place this teaches: the bank name for a bank transaction, your name for one you added.
+  const teachKey = canRule ? (placeRule ? placeRule.match : normName(bankName)) : normName(name);
+  const offerTeach = canRule ? nameChanged || categoryChanged || (billChanged && !!billId) : categoryChanged && !!name;
+  const placeOthers = useMemo(
+    () => (offerTeach && teachKey ? txs.filter((t) => t.id !== existing?.id && teachable(t, cover.trackFrom) && ruleCovers({ match: teachKey }, bankNameOf(t))) : []),
+    [offerTeach, teachKey, txs, existing?.id, cover.trackFrom],
+  );
+  const others = placeOthers.length;
+  // Linking one payment to a bill teaches the place only when the rest look like payments of it too,
+  // so tying one store order to a membership bill doesn't make every order from that store a bill payment.
+  const teachBill = billId ? billMap[billId] : undefined;
+  const billLike = !!teachBill && placeOthers.every((t) => t.amount >= teachBill.amount * 0.25 && t.amount <= teachBill.amount * 1.5);
+  const teach = teachPick ?? (nameChanged || categoryChanged || billLike);
+
+  // A purchase you added by hand that this is the bank's copy of, or the other way around.
+  const dup = useMemo(
+    () => (existing ? findDuplicates(txs, cover.trackFrom).find((d) => d.bank.id === existing.id || d.manual.id === existing.id) : undefined),
+    [existing, txs, cover.trackFrom],
   );
 
   // Remember what category each merchant usually gets.
@@ -68,23 +96,43 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
     if (hit && !categoryId) setCategoryId(hit.cat);
   };
 
+  /** Saves a rule for this place and puts its transactions the way it says. Returns how many others changed. */
+  const teachPlace = (rec: Transaction, fields: { rename?: string | null; categoryId?: string; billId?: string | null }) => {
+    const prior = canRule ? placeRule : rules.find((r) => normName(r.match) === teachKey);
+    const rule: Omit<Rule, 'updatedAt'> = { ...(prior ?? {}), id: prior?.id ?? placeRuleId(teachKey), match: prior?.match ?? teachKey };
+    if (fields.categoryId) rule.categoryId = fields.categoryId;
+    if (fields.rename !== undefined) rule.rename = fields.rename ?? undefined;
+    if (fields.billId !== undefined) rule.billId = fields.billId ?? undefined;
+    return teachRule(rule, rec.id);
+  };
+
   const save = () => {
     const amt = fromBank && existing ? Math.abs(existing.amount) : parseMoney(amount);
     if (!(amt > 0)) return setError('Enter an amount.');
     const cat = categoryId || FALLBACK_CATEGORY;
-    const rec: Transaction = {
+    let rec: Transaction = {
       ...(existing ?? { source: 'manual' as const }),
       id: existing?.id ?? newId(),
       updatedAt: 0,
       date: day,
       at: time ? at(day, time) : fromBank ? existing?.at : undefined,
       amount: fromBank && existing ? existing.amount : direction === 'in' ? -amt : amt,
-      merchant: merchant.trim(),
+      merchant: name,
       categoryId: cat,
       note: note.trim() || undefined,
       billId,
       goalId: billId ? undefined : goalId,
     };
+    if (fromBank) {
+      // A name of your own; the bank's stays underneath, for matching.
+      if (name && name !== bankName) rec.bankName = bankName;
+      else {
+        rec.merchant = bankName;
+        delete rec.bankName;
+      }
+    }
+    if (billId && billPart) rec.billPart = true;
+    else delete rec.billPart;
     if (counted) {
       delete rec.excluded;
       rec.flow = 'spend';
@@ -93,20 +141,58 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
     }
     // Bank updates keep what you changed here.
     if (fromBank) rec.edited = true;
-    put('transactions', rec);
+    // What you changed yourself isn't the place's rule's to undo.
+    const mine: RuleField[] = [];
+    if (nameChanged) mine.push('name');
+    if (categoryChanged) mine.push('category');
+    if (billChanged) mine.push('bill');
+    rec = releaseFromRule(rec, mine);
+    rec = put('transactions', rec);
 
-    if (categoryChanged && always && rec.merchant) {
-      const rule: Rule = { id: ruleId(rec.merchant), updatedAt: 0, match: rec.merchant.trim().toLowerCase(), categoryId: cat };
-      put('rules', rule);
-      for (const t of txs) if (t.id !== rec.id && !t.edited && t.merchant.trim().toLowerCase() === rule.match && t.categoryId !== cat) put('transactions', { ...t, categoryId: cat });
+    let more = 0;
+    if (offerTeach && teach && teachKey) {
+      more = teachPlace(rec, {
+        categoryId: cat,
+        rename: nameChanged ? (name && normName(name) !== normName(bankName) ? name : null) : undefined,
+        billId: billChanged ? (billId ?? null) : undefined,
+      });
     }
-    toast({ title: `${existing ? 'Updated' : 'Added'} ${rec.amount < 0 ? signed(amt) : minus(amt)}`, detail: rec.merchant || undefined });
+    toast({
+      title: `${existing ? 'Updated' : 'Added'} ${rec.amount < 0 ? signed(amt) : minus(amt)}`,
+      detail: more ? `And ${plural(more, 'more')} from ${canRule ? bankName : rec.merchant}` : rec.merchant || undefined,
+    });
     closeSheet();
+  };
+
+  const setHidden = (on: boolean) => {
+    if (!existing) return;
+    const rec: Transaction = releaseFromRule({ ...existing, edited: true }, ['hide']);
+    if (on) rec.hidden = true;
+    else delete rec.hidden;
+    put('transactions', rec);
+    toast({ title: on ? 'Hidden' : 'Showing it again', detail: on ? 'It won’t show or count. Find it in Bank transactions.' : undefined });
+    closeSheet();
+  };
+
+  const merge = () => {
+    if (!dup) return;
+    const { merged, more } = mergePair(dup, mergeName);
+    toast({ title: 'Merged', detail: more ? `And ${plural(more, 'more')} from ${bankNameOf(dup.bank)} renamed` : `Kept the bank’s copy as ${merged.merchant}` });
+    closeSheet();
+  };
+
+  const notSame = () => {
+    if (!dup) return;
+    markDifferent(dup);
+    toast({ title: 'Got it, they’re different' });
   };
 
   const linked = billId ? billMap[billId] : undefined;
   const linkedGoal = !linked && goalId ? cover.goals[goalId] : undefined;
   const isMoneyOut = existing ? existing.amount > 0 : direction === 'out';
+  const paidAmount = existing ? Math.abs(existing.amount) : parseMoney(amount);
+  const short = !!linked && paidAmount > 0 && paidAmount < linked.amount - 0.5;
+  const other = dup && existing ? (dup.bank.id === existing.id ? dup.manual : dup.bank) : undefined;
 
   return (
     <Sheet
@@ -127,6 +213,11 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
               <Trash size={17} />
             </button>
           )}
+          {existing && fromBank && (
+            <button className="btn btn-secondary" onClick={() => setHidden(!existing.hidden)}>
+              {existing.hidden ? <Eye size={17} /> : <EyeOff size={17} />} {existing.hidden ? 'Unhide' : 'Hide'}
+            </button>
+          )}
           <button className="btn btn-primary flex-1" onClick={save}>
             Save
           </button>
@@ -144,6 +235,7 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
               {existing.pending && ' · Pending'}
             </p>
             {existing.rawName && existing.rawName !== existing.merchant && <p className="mt-1 truncate text-[12px] text-ink-3">{existing.rawName}</p>}
+            {existing.hidden && <p className="mt-2 text-[13px] font-medium text-ink-2">Hidden: it doesn’t show or count.</p>}
           </div>
         ) : (
           <>
@@ -163,8 +255,36 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
           </>
         )}
 
-        <Field label="Where">
-          <input className="input" list="merchant-list" placeholder="Chipotle" value={merchant} onChange={(e) => onMerchant(e.target.value)} />
+        {dup && other && (
+          <div className="rounded-3xl border border-line p-4">
+            <p className="flex items-center gap-2 text-[15px] font-semibold">
+              <CopyCheck size={17} className="shrink-0 text-ink-2" /> Same purchase twice?
+            </p>
+            <p className="mt-1 text-[14px] text-ink-2">
+              {other.source === 'plaid' ? 'The bank sent' : 'You added'} <b className="font-semibold text-ink">{other.merchant || 'an expense'}</b> for {money(Math.abs(other.amount))}{' '}
+              {dayLabel(other.date)}. Merging keeps one: the bank’s amount, with your name, category, and note.
+            </p>
+            {dup.manual.merchant.trim() && normName(dup.manual.merchant) !== normName(bankNameOf(dup.bank)) && (
+              <label className="mt-3 flex items-center justify-between gap-4 rounded-2xl bg-raised px-4 py-3">
+                <span className="text-[14px]">
+                  Call every {bankNameOf(dup.bank)} “{dup.manual.merchant.trim()}”
+                </span>
+                <Toggle checked={mergeName} onChange={setMergeName} label={`Call every ${bankNameOf(dup.bank)} ${dup.manual.merchant.trim()}`} />
+              </label>
+            )}
+            <div className="mt-3 flex gap-2">
+              <button className="btn btn-sm btn-primary" onClick={merge}>
+                Merge them
+              </button>
+              <button className="btn btn-sm btn-secondary" onClick={notSame}>
+                They’re different
+              </button>
+            </div>
+          </div>
+        )}
+
+        <Field label={fromBank ? 'Name' : 'Where'} hint={fromBank && name !== bankName ? `The bank calls it ${bankName}.` : undefined}>
+          <input className="input" list="merchant-list" placeholder={fromBank ? bankName : 'Chipotle'} value={merchant} onChange={(e) => onMerchant(e.target.value)} />
           <datalist id="merchant-list">
             {suggestions.map((s) => (
               <option key={s.name} value={s.name} />
@@ -175,30 +295,37 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
         <div>
           <span className="label">Category</span>
           <CategoryPicker value={categoryId} onChange={setCategoryId} />
-          {categoryChanged && merchant.trim() && (
-            <label className="mt-3 flex items-center justify-between gap-4 rounded-2xl bg-raised px-4 py-3">
-              <span className="text-[14px]">
-                Always use this for {merchant.trim()}
-                {others > 0 && <span className="text-ink-2"> (and {others} more like it)</span>}
-              </span>
-              <Toggle checked={always} onChange={setAlways} label={`Always use this category for ${merchant.trim()}`} />
-            </label>
-          )}
         </div>
 
         {isMoneyOut && (
           <div>
             <span className="label">Paid for</span>
             {linked ? (
-              <div className="flex items-center gap-3 rounded-2xl bg-raised px-4 py-3">
-                <PiggyBank size={18} className="shrink-0 text-ink-2" />
-                <span className="min-w-0 flex-1 text-[14px]">
-                  Payment for <b className="font-semibold">{linked.name}</b>. {day >= linked.startDate ? 'Covered by its daily set-aside, so it isn’t spending today.' : 'Made before the set-asides started, so it still counts as spending.'}
-                </span>
-                <button className="text-[14px] font-semibold text-ink-2 hover:text-ink" onClick={() => setBillId(undefined)}>
-                  Unlink
-                </button>
-              </div>
+              <>
+                <div className="flex items-center gap-3 rounded-2xl bg-raised px-4 py-3">
+                  <PiggyBank size={18} className="shrink-0 text-ink-2" />
+                  <span className="min-w-0 flex-1 text-[14px]">
+                    Payment for <b className="font-semibold">{linked.name}</b>.{' '}
+                    {day >= linked.startDate ? 'Its set-aside covers it, so it isn’t spending.' : 'Made before the set-asides started, so it still counts as spending.'}
+                    {day >= linked.startDate &&
+                      !billPart &&
+                      Math.abs(paidAmount - linked.amount) > 0.5 &&
+                      ` The bill counts the ${money(paidAmount)} you paid, not ${money(linked.amount)}.`}
+                  </span>
+                  <button className="text-[14px] font-semibold text-ink-2 hover:text-ink" onClick={() => (setBillId(undefined), setBillPart(false))}>
+                    Unlink
+                  </button>
+                </div>
+                {short && linked.payFrom !== 'both' && (
+                  <label className="mt-2 flex items-center justify-between gap-4 rounded-2xl bg-raised px-4 py-3">
+                    <span className="text-[14px]">
+                      Only part of {linked.name}
+                      <span className="block text-[13px] text-ink-2">The rest comes in another payment, like from your next paycheck.</span>
+                    </span>
+                    <Toggle checked={billPart} onChange={setBillPart} label={`Only part of ${linked.name}`} />
+                  </label>
+                )}
+              </>
             ) : linkedGoal ? (
               <div className="flex items-center gap-3 rounded-2xl bg-raised px-4 py-3">
                 <Gift size={18} className="shrink-0 text-ink-2" />
@@ -214,7 +341,7 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
                 {bills.map((b) => (
                   <button
                     key={b.id}
-                    onClick={() => setBillId(b.id)}
+                    onClick={() => (setBillId(b.id), setBillPart(b.payFrom === 'both'))}
                     className="inline-flex h-9 items-center gap-1.5 rounded-full border border-line px-3 text-[14px] font-medium text-ink-2 transition-colors hover:text-ink"
                   >
                     <PiggyBank size={15} /> {b.name}
@@ -241,6 +368,18 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
               </div>
             )}
           </div>
+        )}
+
+        {offerTeach && teachKey && (
+          <label className="flex items-center justify-between gap-4 rounded-2xl bg-raised px-4 py-3">
+            <span className="text-[14px]">
+              Do the same for every {canRule ? bankName : name}
+              <span className="block text-[13px] text-ink-2">
+                {others > 0 ? `${plural(others, 'more')} now, and new ones from the bank.` : 'New ones from the bank too.'}
+              </span>
+            </span>
+            <Toggle checked={teach} onChange={setTeach} label={`Do the same for every ${canRule ? bankName : name}`} />
+          </label>
         )}
 
         <div className={clsx('grid gap-3', fromBank ? 'grid-cols-1' : 'grid-cols-2')}>

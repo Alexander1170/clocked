@@ -2,7 +2,7 @@
 import type { Bill, Goal, Job, LocalDate, Move, Saving, WishItem } from './types.ts';
 import type { EngineData } from './accrual.ts';
 import { addDays } from './dates.ts';
-import { billShares, dueDatesBetween, earningDays, shareDays, windowsTouching } from './bills.ts';
+import { billShares, dueDatesBetween, earningDays, shareDays, windowsTouching, type PaidLog } from './bills.ts';
 import { paydaysBetween } from './pay.ts';
 
 type IsEarningDay = (d: LocalDate) => boolean;
@@ -196,6 +196,8 @@ export interface SetAsides {
   goals: Goal[];
   /** Leftover money put toward goals. */
   moves?: readonly Move[];
+  /** Bank payments linked to bills, so paid bills count what you actually paid. */
+  paid?: PaidLog;
 }
 
 /** The leftover money that went toward one goal. */
@@ -224,7 +226,7 @@ export function planSetAsides(input: SetAsides, data: EngineData, from: LocalDat
       plan.byKind[kind].set(d, (plan.byKind[kind].get(d) ?? 0) + v);
     }
   };
-  for (const b of input.bills) add('bills', b.id, billShares(b, from, to, isEarningDay, data.jobs));
+  for (const b of input.bills) add('bills', b.id, billShares(b, from, to, isEarningDay, data.jobs, input.paid));
   for (const s of input.savings) add('savings', s.id, savingShares(s, from, to, isEarningDay, data.jobs));
   for (const g of input.goals) add('goals', g.id, goalShares(g, from, to, isEarningDay, movesFor(g.id, input.moves)));
   return plan;

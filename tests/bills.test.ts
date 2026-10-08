@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Bill, DayOverride, ScheduledJob, Shift } from '../shared/types.ts';
-import { billForPayment, billShares, billStatus, dueDatesBetween, earningDays, payDateFor, planBills, saveWindow, upcomingPaychecks } from '../shared/bills.ts';
+import { billForPayment, billShares, billStatus, dueDatesBetween, earningDays, paidLog, payDateFor, payDatesFor, planBills, saveWindow, upcomingPaychecks } from '../shared/bills.ts';
 import { paycheckSlot } from '../shared/pay.ts';
 
 const nineToFive: Shift = { start: '08:00', end: '17:00', breakMinutes: 60, breakStart: '12:00' };
@@ -165,6 +165,42 @@ describe('bills paid from a paycheck', () => {
       ['2026-11-13', 'mid', ['phone', 'power'], 210],
       ['2026-11-27', 'end', ['net', 'rent', 'music'], 1092],
     ]);
+  });
+
+  it('splits a bill between both paychecks', () => {
+    const split = { ...phone, payFrom: 'both' as const };
+    expect(payDatesFor(split, '2026-11-09', jobs)).toEqual(['2026-10-30', '2026-11-13']);
+    const checks = upcomingPaychecks(fridays, [split], jobs, '2026-10-20', 3);
+    expect(checks.map((c) => [c.payday, c.bills.map((b) => [b.amount, b.share, b.dues[0]])])).toEqual([
+      ['2026-10-30', [[30, 0.5, '2026-11-09']]],
+      ['2026-11-13', [[30, 0.5, '2026-11-09']]],
+      ['2026-11-27', [[30, 0.5, '2026-12-09']]],
+    ]);
+  });
+
+  it('goes by what the bank shows you paid', () => {
+    const paid = paidLog([{ billId: 'rent', date: '2026-10-30', amount: 950 }], '2026-11-02');
+    const [check] = upcomingPaychecks(fridays, [rent], jobs, '2026-10-30', 1, false, paid);
+    expect(check.bills[0]).toMatchObject({ amount: 950, paid: 950, done: true });
+    // The days that saved for it add up to what was paid.
+    expect(sum(billShares(rent, '2026-10-01', '2026-10-30', everyDay, jobs, paid))).toBeCloseTo(950, 6);
+  });
+
+  it('keeps a part payment open until the rest comes in', () => {
+    const part = { billId: 'phone', date: '2026-10-30', amount: 25, billPart: true };
+    const first = upcomingPaychecks(fridays, [phone], jobs, '2026-11-01', 1, false, paidLog([part], '2026-11-01'))[0].bills[0];
+    expect(first).toMatchObject({ pay: '2026-11-13', amount: 60, paid: 25, done: false });
+    // The rest posts a few days after the paycheck that pays it.
+    const rest = paidLog([part, { billId: 'phone', date: '2026-11-16', amount: 35 }], '2026-11-17');
+    expect(upcomingPaychecks(fridays, [phone], jobs, '2026-11-01', 1, false, rest)[0].bills[0]).toMatchObject({ amount: 60, done: true });
+  });
+
+  it('settles a split bill half by half', () => {
+    const split = { ...phone, payFrom: 'both' as const };
+    const half = paidLog([{ billId: 'phone', date: '2026-10-30', amount: 30 }], '2026-11-01');
+    const [a, b] = upcomingPaychecks(fridays, [split], jobs, '2026-10-30', 2, false, half).map((c) => c.bills[0]);
+    expect(a).toMatchObject({ pay: '2026-10-30', paid: 30, done: true });
+    expect(b).toMatchObject({ pay: '2026-11-13', paid: 0, done: false });
   });
 });
 

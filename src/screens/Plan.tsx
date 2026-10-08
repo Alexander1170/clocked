@@ -18,6 +18,7 @@ import {
   useSavings,
   useSetAsidePlan,
   useSettings,
+  usePaidLog,
   useTransactions,
 } from '../lib/hooks.ts';
 import { categoryIcon } from '../lib/categories.ts';
@@ -59,9 +60,11 @@ function Progress({ value, of, color = 'var(--s7)' }: { value: number; of: numbe
 
 /** "due Oct 22, in 17 days", or for a bill paid from a paycheck, "pays Oct 27 · due Oct 22". */
 function whenText(s: BillStatus, today: string): string {
+  if (s.done) return `paid · due ${shortDay(s.due)}`;
   if (s.pay === s.due) return `due ${dayLabel(s.due)}, ${daysUntil(s.due, today)}`;
   const late = diffDays(s.due, s.pay);
-  return `pays ${shortDay(s.pay)} · due ${shortDay(s.due)}${late > 0 ? `, ${late} ${late === 1 ? 'day' : 'days'} late` : ''}`;
+  const half = s.share < 1 ? 'half ' : '';
+  return `pays ${half}${shortDay(s.pay)} · due ${shortDay(s.due)}${late > 0 ? `, ${late} ${late === 1 ? 'day' : 'days'} late` : ''}`;
 }
 
 function Row({ icon, title, amount, sub, children, onClick }: { icon: React.ReactNode; title: string; amount: string; sub: React.ReactNode; children?: React.ReactNode; onClick(): void }) {
@@ -90,6 +93,7 @@ export function Plan() {
   const savings = useSavings();
   const goals = useGoals();
   const txs = useTransactions();
+  const paid = usePaidLog();
   const cats = useCategoryMap();
   const jobs = useJobMap();
   const data = useEngineData();
@@ -119,15 +123,15 @@ export function Plan() {
   };
 
   const billRows = bills
-    .map((b) => ({ bill: b, status: billStatus(b, today, isEarningDay, data.jobs), last: lastPayment(b) }))
+    .map((b) => ({ bill: b, status: billStatus(b, today, isEarningDay, data.jobs, paid), last: lastPayment(b) }))
     .sort((a, b) => (a.status?.pay ?? '9999').localeCompare(b.status?.pay ?? '9999') || (a.status?.due ?? '').localeCompare(b.status?.due ?? ''));
   const perMonth = bills.reduce((t, b) => t + b.amount * PER_MONTH[b.frequency], 0);
 
   // The bills each upcoming paycheck pays, for your main job.
   const payJob = useJobs().filter(isScheduled).find((j) => j.takeHome > 0);
   const checks = useMemo(
-    () => (payJob && bills.length ? upcomingPaychecks(payJob, bills, data.jobs, today, 3).map((c) => ({ check: c, amount: checkAmount(payJob, data, c.payday, now) })) : []),
-    [payJob, bills, data, today, now],
+    () => (payJob && bills.length ? upcomingPaychecks(payJob, bills, data.jobs, today, 3, false, paid).map((c) => ({ check: c, amount: checkAmount(payJob, data, c.payday, now) })) : []),
+    [payJob, bills, data, today, now, paid],
   );
 
   const moves = useMoves();
@@ -204,7 +208,7 @@ export function Plan() {
                   <h2 className="px-1 pt-1 text-[15px] font-semibold">Next paychecks</h2>
                   <div className="grid gap-3 lg:grid-cols-3">
                     {checks.map(({ check, amount }) => (
-                      <PaycheckCard key={check.payday} check={check} amount={amount} today={today} txs={txs} />
+                      <PaycheckCard key={check.payday} check={check} amount={amount} today={today} />
                     ))}
                   </div>
                   <h2 className="px-1 pt-4 text-[15px] font-semibold">All bills</h2>

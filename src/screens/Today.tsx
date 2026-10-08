@@ -15,6 +15,7 @@ import {
   useNow,
   useSetAsidePlan,
   useSpendCheck,
+  usePaidLog,
   useTransactions,
   useUntilPayday,
   isGig,
@@ -172,6 +173,7 @@ export function Today() {
   const bills = useBills();
   const jobMap = useJobMap();
   const txs = useTransactions();
+  const paid = usePaidLog();
   const cats = useCategoryMap();
   const cover = useCoverage();
   const counts = useSpendCheck();
@@ -205,9 +207,9 @@ export function Today() {
   // Each job's paycheck today (if it's payday) and its next one, with the bills they pay.
   const paychecks = useMemo(() => {
     const out = new Map<string, Paycheck[]>();
-    for (const j of jobs) if (isScheduled(j) && j.takeHome > 0) out.set(j.id, upcomingPaychecks(j, bills, data.jobs, today, 2));
+    for (const j of jobs) if (isScheduled(j) && j.takeHome > 0) out.set(j.id, upcomingPaychecks(j, bills, data.jobs, today, 2, false, paid));
     return out;
-  }, [jobs, bills, data.jobs, today]);
+  }, [jobs, bills, data.jobs, today, paid]);
   const dashJob = dash ? jobMap[dash.jobId] : null;
 
   let statusLine: React.ReactNode;
@@ -343,7 +345,7 @@ export function Today() {
               if (!todays) return null;
               return (
                 <div key={`today-${p.job.id}`} className="mt-3">
-                  <PaycheckCard check={todays} amount={checkAmount(p.job, data, today, now)} today={today} txs={txs} title={pay.length > 1 ? `Pay today from ${p.job.name}` : 'Pay today'} />
+                  <PaycheckCard check={todays} amount={checkAmount(p.job, data, today, now)} today={today} title={pay.length > 1 ? `Pay today from ${p.job.name}` : 'Pay today'} />
                 </div>
               );
             })}

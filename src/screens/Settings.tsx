@@ -1,12 +1,12 @@
 import { useRef } from 'react';
-import { ArrowLeft, Briefcase, ChevronRight, Download, Landmark, RefreshCw, Tags, Upload } from 'lucide-react';
+import { ArrowLeft, Briefcase, ChevronRight, Download, Landmark, RefreshCw, Store, Tags, Upload } from 'lucide-react';
 import type { BaseRecord, Change, CollectionName } from '../../shared/types.ts';
 import { COLLECTIONS } from '../../shared/types.ts';
 import { useData } from '../lib/store.ts';
 import { syncNow, useSync } from '../lib/sync.ts';
 import { useSettings } from '../lib/hooks.ts';
 import { go, toast, useTheme, type ThemePref } from '../lib/ui.ts';
-import { clock } from '../lib/format.ts';
+import { clock, dayLabel } from '../lib/format.ts';
 import { Card, Segmented, SectionTitle } from '../components/ui.tsx';
 import { SyncBadge } from '../components/SyncBadge.tsx';
 
@@ -103,6 +103,18 @@ export function Settings() {
           <span className="min-w-0 flex-1">
             <span className="block text-[15px] font-semibold">Bank connection</span>
             <span className="block text-[13px] text-ink-2">Bring in bank transactions through Plaid</span>
+          </span>
+          <ChevronRight size={18} className="text-ink-3" />
+        </button>
+        <button onClick={() => go('review')} className="flex w-full items-center gap-3 text-left">
+          <span className="grid size-10 shrink-0 place-items-center rounded-full bg-raised">
+            <Store size={19} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-semibold">Bank transactions</span>
+            <span className="block text-[13px] text-ink-2">
+              {settings.trackFrom ? `Counting from ${dayLabel(settings.trackFrom)}. ` : ''}Rename, hide, or tie them to bills
+            </span>
           </span>
           <ChevronRight size={18} className="text-ink-3" />
         </button>

@@ -293,6 +293,36 @@ describe('bank sync against a fake Plaid', () => {
     expect(get('t13')!.accountOff).toBeUndefined();
   });
 
+  it('follows what you taught it about a place', async () => {
+    store.apply([
+      change('bills', { id: 'bill_gym', updatedAt: 1, name: 'Gym', amount: 40, frequency: 'monthly', dueDate: '2026-10-20', categoryId: 'cat_health', startDate: '2026-10-01' }),
+      change('rules', { id: 'rule_atm', updatedAt: 1, match: 'atm', rename: 'Cash', categoryId: 'cat_cash' }),
+      change('rules', { id: 'rule_fitco', updatedAt: 1, match: 'fitco', billId: 'bill_gym' }),
+      change('rules', { id: 'rule_app', updatedAt: 1, match: 'pay app', hide: true }),
+      change('transactions', { id: 'hand3', updatedAt: 1, source: 'manual', date: '2026-10-06', amount: 60, merchant: 'Cash', categoryId: 'cat_cash', note: 'for the weekend' }),
+    ]);
+    fake.pages[9] = {
+      added: [
+        tx('t15', { amount: 60, merchant_name: null, name: 'ATM WITHDRAWAL MAIN ST', authorized_date: '2026-10-06' }),
+        tx('t16', { amount: 20, merchant_name: null, name: 'ATM WITHDRAWAL ELM AVE', authorized_date: '2026-10-07' }),
+        tx('t17', { amount: 12, merchant_name: 'FitCo', name: 'FITCO CLASS PASS' }),
+        tx('t18', { amount: 30, merchant_name: 'Pay App', name: 'PAY APP*FRIEND' }),
+      ],
+      modified: [],
+      removed: [],
+    };
+    await bank.syncItem('item_1');
+    // What you added by hand matches by the name you taught, and the bank's copy takes its place.
+    expect(get('t15')).toMatchObject({ merchant: 'Cash', bankName: 'Atm Withdrawal Main St', categoryId: 'cat_cash', note: 'for the weekend', edited: true });
+    expect(store.get('transactions', 'hand3')?.deleted).toBe(true);
+    expect(get('t16')).toMatchObject({ merchant: 'Cash', bankName: 'Atm Withdrawal Elm Ave', categoryId: 'cat_cash', ruleId: 'rule_atm', ruleSet: ['name', 'category'] });
+    expect(get('t17')).toMatchObject({ billId: 'bill_gym', ruleSet: ['bill'] });
+    expect(get('t18')!.hidden).toBe(true);
+    // The hourly check keeps the bill a place pays, whatever the amount.
+    await bank.syncAll();
+    expect(get('t17')!.billId).toBe('bill_gym');
+  });
+
   it('turns an account on and off', () => {
     bank.setAccountIncluded('item_1', 'acc_loan', true);
     expect(get('t4')!.accountOff).toBeUndefined();

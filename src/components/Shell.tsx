@@ -15,6 +15,7 @@ import { BillSheet } from '../sheets/BillSheet.tsx';
 import { SavingSheet } from '../sheets/SavingSheet.tsx';
 import { GoalSheet } from '../sheets/GoalSheet.tsx';
 import { CategorySheet } from '../sheets/CategorySheet.tsx';
+import { PlaceSheet } from '../sheets/PlaceSheet.tsx';
 import { SyncBadge } from './SyncBadge.tsx';
 
 /** The phone's bottom tabs. Jobs live in Settings on phones; they change rarely. */
@@ -125,10 +126,13 @@ export function SheetHost() {
       case 'category':
         content = <CategorySheet id={top.id} />;
         break;
+      case 'place':
+        content = <PlaceSheet placeKey={top.key} />;
+        break;
     }
   }
   // A new key remounts the sheet, so switching sheets resets their form state.
-  const key = top ? `${depth}-${top.kind}-${'id' in top ? top.id : ''}` : 'none';
+  const key = top ? `${depth}-${top.kind}-${'id' in top ? top.id : 'key' in top ? top.key : ''}` : 'none';
   return top ? <div key={key}>{content}</div> : null;
 }
 

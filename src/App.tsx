@@ -14,6 +14,7 @@ import { Plan } from './screens/Plan.tsx';
 import { Bank } from './screens/Bank.tsx';
 import { Categories } from './screens/Categories.tsx';
 import { Insights } from './screens/Insights.tsx';
+import { Review } from './screens/Review.tsx';
 
 let booted = false;
 
@@ -48,6 +49,7 @@ export default function App() {
           {route === 'plan' && <Plan />}
           {route === 'bank' && <Bank />}
           {route === 'categories' && <Categories />}
+          {route === 'review' && <Review />}
         </div>
       </main>
       <TabBar route={route} />

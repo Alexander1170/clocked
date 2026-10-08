@@ -111,10 +111,22 @@ export interface Transaction extends BaseRecord {
   flow?: TxFlow;
   /** A payment toward this bill. Covered by the bill's daily set-aside, so it isn't spending that day. */
   billId?: string;
+  /** Pays only part of the bill; the rest comes in another payment. */
+  billPart?: boolean;
   /** A purchase from the wish list. Covered by the goal's daily set-aside. */
   goalId?: string;
   /** The user changed this bank transaction, so later bank updates keep their category, note, and flags. */
   edited?: boolean;
+  /** Hidden by you: it doesn't show or count anywhere. */
+  hidden?: boolean;
+  /** The name the bank sent, when it shows under a name you gave it. */
+  bankName?: string;
+  /** The rule that last applied to it. */
+  ruleId?: string;
+  /** What that rule set, so changing or forgetting the rule can take it back. */
+  ruleSet?: RuleField[];
+  /** Transactions you said aren't the same purchase as this one, so they aren't offered as duplicates. */
+  distinct?: string[];
   plaidId?: string;
   /** The bank connection it came from. */
   itemId?: string;
@@ -131,17 +143,31 @@ export interface Transaction extends BaseRecord {
 
 export type TxFlow = 'spend' | 'income' | 'transfer';
 
+/** What a rule can set on a transaction. */
+export type RuleField = 'name' | 'category' | 'hide' | 'bill';
+
 export interface Category extends BaseRecord {
   name: string;
   icon: string;
   sort: number;
 }
 
-/** Always file a merchant's transactions under one category. */
+/**
+ * What you taught Clocked about a place your bank transactions come from. It
+ * covers the bank name, and longer ones that start with it ("ATM" covers
+ * "ATM Main St"), past and future.
+ */
 export interface Rule extends BaseRecord {
-  /** Lowercased merchant name. */
+  /** Lowercased bank name. */
   match: string;
-  categoryId: string;
+  /** File them under this category. */
+  categoryId?: string;
+  /** Show them under this name. */
+  rename?: string;
+  /** Hide them: they don't show or count. */
+  hide?: boolean;
+  /** They pay this bill, whatever the amount. */
+  billId?: string;
 }
 
 export type BillFrequency = 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'yearly';
@@ -161,10 +187,11 @@ export interface Bill extends BaseRecord {
   /** Last day to set aside. Payments due after it are dropped. */
   endDate?: LocalDate;
   /**
-   * The paycheck that pays it: the one on or right before the 1st ('end'), or
-   * the one after that ('mid'). Unset means it's paid on its due date.
+   * The paycheck that pays it: the one on or right before the 1st ('end'), the
+   * one after that ('mid'), or half from each ('both'). Unset means it's paid
+   * on its due date.
    */
-  payFrom?: BillPaycheck;
+  payFrom?: BillPayFrom;
   /** Days past the due date that are fine, so a paycheck in that stretch can still pay it. */
   lateDays?: number;
   /** Whose paychecks. The first scheduled job when unset. */
@@ -172,6 +199,7 @@ export interface Bill extends BaseRecord {
 }
 
 export type BillPaycheck = 'end' | 'mid';
+export type BillPayFrom = BillPaycheck | 'both';
 
 export type SavingFrequency = BillFrequency | 'paycheck';
 
@@ -234,6 +262,8 @@ export interface Settings extends BaseRecord {
   billSpread?: 'workdays' | 'everyday';
   /** Your own weekly food budget. Unset means the app suggests one. */
   foodWeekly?: number;
+  /** Bank transactions before this day don't show or count. */
+  trackFrom?: LocalDate;
 }
 
 export interface CollectionMap {
