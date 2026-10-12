@@ -57,6 +57,15 @@ export function findManualMatch(t: { amount: number; date: LocalDate; merchant: 
   return best;
 }
 
+/** Exactly midnight on the server's clock, which runs in your time zone. */
+const isMidnight = (t: number) => {
+  const d = new Date(t);
+  const local = d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0 && d.getMilliseconds() === 0;
+  // Or Plaid's own default, midnight UTC.
+  const utc = d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0 && d.getUTCMilliseconds() === 0;
+  return local || utc;
+};
+
 export interface MapContext {
   /** The record already stored for this transaction. */
   existing?: Transaction;
@@ -77,7 +86,9 @@ export function mapPlaidTransaction(t: PlaidTransaction, ctx: MapContext): Trans
   const merchant = (t.merchant_name || cleanName(t.name) || t.name).trim();
   const amount = Math.round(t.amount * 100) / 100;
   const stamp = t.authorized_datetime || t.datetime;
-  const at = stamp ? Date.parse(stamp) : NaN;
+  const parsed = stamp ? Date.parse(stamp) : NaN;
+  // Some banks stamp every transaction at midnight: that's no time of day at all.
+  const at = Number.isFinite(parsed) && !isMidnight(parsed) ? parsed : NaN;
   const prev = ctx.existing ?? ctx.carryFrom;
 
   const rec: Transaction = {
@@ -110,8 +121,14 @@ export function mapPlaidTransaction(t: PlaidTransaction, ctx: MapContext): Trans
     rec.billPart = prev.billPart;
     rec.goalId = prev.goalId;
     rec.hidden = prev.hidden;
+    rec.jobId = prev.jobId;
+    rec.gigPayout = prev.gigPayout;
+    rec.wasPayout = prev.wasPayout;
+    rec.notPayout = prev.notPayout;
     rec.ruleId = prev.ruleId;
     rec.ruleSet = prev.ruleSet;
+    // An edited pending charge's rule carries to the posted one under the bank's new name too.
+    rec.ruleCarried = prev.ruleCarried || (ctx.carryFrom && prev.ruleId && !ruleFor(ctx.rules, merchant, t.name) ? true : undefined);
     // Keep the name you gave it: yours for something you added by hand, or a rename.
     const yours = prev.source === 'plaid' ? (prev.bankName ? prev.merchant : undefined) : prev.merchant.trim();
     if (yours && yours !== merchant) {
@@ -126,8 +143,13 @@ export function mapPlaidTransaction(t: PlaidTransaction, ctx: MapContext): Trans
     // Bills paid by transfer, like a loan payment to a credit union, count too.
     rec.billId = rec.flow !== 'income' && amount > 0 ? billForPayment(ctx.bills, merchant, amount, t.name)?.id : undefined;
     rec.note = prev?.note;
-    // What you taught Clocked about this place: its name, category, bill, or hiding it.
-    Object.assign(rec, withRule(rec, ruleFor(ctx.rules, merchant, t.name), ctx.bills));
+    // What you taught Clocked about this place: its name, category, bill, or hiding it. A pending
+    // charge often posts under another name, so the posted one keeps the rule the pending one had,
+    // through later updates too.
+    const own = ruleFor(ctx.rules, merchant, t.name);
+    const keep = !own && prev?.ruleId && (ctx.carryFrom || prev.ruleCarried) ? ctx.rules.find((r) => r.id === prev.ruleId && !r.deleted) : undefined;
+    Object.assign(rec, withRule(rec, own ?? keep, ctx.bills));
+    if (keep) rec.ruleCarried = true;
     if (ctx.categoryGone?.(rec.categoryId)) rec.categoryId = 'cat_other';
   }
   rec.distinct = prev?.distinct;

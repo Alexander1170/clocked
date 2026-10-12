@@ -20,14 +20,17 @@ const PAD_TOP = 8;
 
 /**
  * Lines over evenly spaced points (days, usually). Points after `actualUntil`
- * are projections and draw faded and dashed. Hover or tap for a crosshair with
- * every series' value; the caller shows the legend.
+ * are projections and draw faded and dashed, or not at all without
+ * `projections`. Points before `startAt` aren't drawn. Hover or tap for a
+ * crosshair with every series' value; the caller shows the legend.
  */
 export function LineChart({
   series,
   labels,
   titles,
   actualUntil,
+  startAt = 0,
+  projections = true,
   height = 180,
   labelEvery = 1,
   format,
@@ -40,6 +43,10 @@ export function LineChart({
   titles: string[];
   /** Last index that's real rather than projected. */
   actualUntil: number;
+  /** First index to draw. */
+  startAt?: number;
+  /** Draw what's expected after `actualUntil`, dashed. */
+  projections?: boolean;
   height?: number;
   labelEvery?: number;
   format(v: number): string;
@@ -57,7 +64,7 @@ export function LineChart({
   }, []);
 
   const n = labels.length;
-  const max = niceMax(Math.max(0, ...series.flatMap((s) => s.values)));
+  const max = niceMax(Math.max(0, ...series.flatMap((s) => (projections ? s.values.slice(startAt) : s.values.slice(startAt, actualUntil + 1)))));
   const plotW = width - PAD_RIGHT;
   const plotH = height - PAD_TOP;
   const x = (i: number) => (n > 1 ? (i / (n - 1)) * plotW : plotW / 2);
@@ -72,7 +79,7 @@ export function LineChart({
     if (!el || n === 0) return;
     const rect = el.getBoundingClientRect();
     const i = Math.round(((clientX - rect.left) / plotW) * (n - 1));
-    setHover(Math.max(0, Math.min(n - 1, i)));
+    setHover(Math.max(startAt, Math.min(projections ? n - 1 : actualUntil, i)));
   };
 
   return (
@@ -96,8 +103,8 @@ export function LineChart({
           ))}
           {series.map((s) => (
             <g key={s.key} fill="none" stroke={s.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <path d={path(s.values, 0, Math.min(actualUntil, n - 1))} />
-              {actualUntil < n - 1 && <path d={path(s.values, Math.max(0, actualUntil), n - 1)} strokeDasharray="4 5" strokeOpacity={0.5} />}
+              {actualUntil >= startAt && <path d={path(s.values, startAt, Math.min(actualUntil, n - 1))} />}
+              {projections && actualUntil < n - 1 && <path d={path(s.values, Math.max(0, actualUntil), n - 1)} strokeDasharray="4 5" strokeOpacity={0.5} />}
             </g>
           ))}
           {hover != null && (

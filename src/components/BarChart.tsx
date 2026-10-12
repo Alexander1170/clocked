@@ -18,6 +18,8 @@ export interface BarDatum {
   parts: BarPart[];
   /** Marks "now" (today, this hour, this month). */
   current?: boolean;
+  /** Nothing to show: it hasn't happened yet, or it's before you started tracking. */
+  blank?: boolean;
 }
 
 function niceMax(v: number): number {
@@ -59,14 +61,17 @@ export function BarChart({
   const ticks = [max, max / 2];
 
   const onKey = (e: KeyboardEvent, i: number) => {
-    const next = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : null;
-    if (next == null || next < 0 || next >= data.length) return;
+    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!step) return;
+    let next = i + step;
+    while (next >= 0 && next < data.length && data[next].blank) next += step;
+    if (next < 0 || next >= data.length) return;
     e.preventDefault();
     onSelect(next);
     (e.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
   };
 
-  const tip = hover ?? null;
+  const tip = hover != null && !data[hover]?.blank ? hover : null;
 
   return (
     <div className="relative select-none" aria-label={ariaLabel} role="group">
@@ -89,6 +94,7 @@ export function BarChart({
               <button
                 key={d.key}
                 onClick={() => onSelect(i)}
+                disabled={d.blank}
                 onKeyDown={(e) => onKey(e, i)}
                 onPointerEnter={(e) => e.pointerType === 'mouse' && setHover(i)}
                 onPointerLeave={() => setHover(null)}
@@ -121,7 +127,7 @@ export function BarChart({
                     />
                   ))}
                 </span>
-                {rects.length === 0 && <span className="block h-[2px] w-[64%] max-w-6 rounded-full bg-grid" />}
+                {rects.length === 0 && !d.blank && <span className="block h-[2px] w-[64%] max-w-6 rounded-full bg-grid" />}
               </button>
             );
           })}

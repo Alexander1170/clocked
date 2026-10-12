@@ -25,7 +25,7 @@ export const BILL_FREQUENCIES: Array<{ value: BillFrequency; label: string }> = 
 type PayChoice = BillPayFrom | 'due';
 
 const PAY_CHOICES: Array<{ value: PayChoice; label: string; hint: string }> = [
-  { value: 'due', label: 'On its due date', hint: 'Autopay, or whenever it’s due.' },
+  { value: 'due', label: 'Paycheck before it’s due', hint: 'Whichever paycheck comes last before the due date.' },
   { value: 'end', label: 'End-of-month paycheck', hint: 'The one on or right before the 1st.' },
   { value: 'mid', label: 'Mid-month paycheck', hint: 'The one after that.' },
   { value: 'both', label: 'Split between both', hint: 'Half from each paycheck.' },
@@ -59,7 +59,8 @@ export function BillSheet({ id, fromTx }: { id?: string; fromTx?: string }) {
   // A bill made from a payment matches the bank's name for it, and starts with that payment, so it
   // counts as this bill rather than spending.
   const [match, setMatch] = useState(existing?.match ?? (tx ? bankNameOf(tx) : ''));
-  const [startDate, setStartDate] = useState(existing?.startDate ?? (tx && tx.date < today ? tx.date : today));
+  // From a payment: start with that payment, so it counts as this bill. It saves on its own day.
+  const [startDate, setStartDate] = useState(existing?.startDate ?? (tx && tx.date <= today ? tx.date : today));
   const scheduled = useJobs().filter(isScheduled);
   const allBills = useBills();
   // New bills start out paid the way most of your bills are.

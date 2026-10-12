@@ -173,13 +173,20 @@ export function Insights() {
   };
 
   // ---- Earning vs spending, day by day --------------------------------------
+  // It counts from the day you started tracking, and stops at today.
+  const paceFrom = settings.trackFrom && settings.trackFrom > monthFrom ? settings.trackFrom : monthFrom;
   const pace = useMemo(() => {
     const segs = buildSegments(data, monthFrom, monthTo, now);
     const spentByDay = new Map<LocalDate, number>();
-    for (const tx of txs) if (tx.date >= monthFrom && tx.date <= monthTo && counts(tx)) spentByDay.set(tx.date, (spentByDay.get(tx.date) ?? 0) + tx.amount);
+    for (const tx of txs) if (tx.date >= paceFrom && tx.date <= monthTo && counts(tx)) spentByDay.set(tx.date, (spentByDay.get(tx.date) ?? 0) + tx.amount);
     const earned: number[] = [];
     const out: number[] = [];
     for (const d of monthDays) {
+      if (d < paceFrom) {
+        earned.push(0);
+        out.push(0);
+        continue;
+      }
       const t = tally(segs, dayStart(d), dayStart(addDays(d, 1)), now);
       earned.push(t.value + (d > today ? t.projected : 0));
       out.push((spentByDay.get(d) ?? 0) + (monthPlan.byDay.get(d) ?? 0));
@@ -188,13 +195,13 @@ export function Insights() {
     const earnedC = cumulative(earned);
     const outC = cumulative(out);
     const spentSoFar = [...spentByDay].filter(([d]) => d <= today).reduce((t, [, v]) => t + v, 0);
-    const daysSoFar = todayIndex + 1;
-    const daysLeft = monthDays.length - daysSoFar;
+    const daysSoFar = todayIndex + 1 - Math.max(0, monthDays.indexOf(paceFrom));
+    const daysLeft = monthDays.length - (todayIndex + 1);
     const ahead = earnedC[todayIndex] - outC[todayIndex];
     // At this pace: keep spending like you have this month, on top of what's scheduled and planned.
     const end = earnedC[earnedC.length - 1] - outC[outC.length - 1] - (daysSoFar > 0 ? (spentSoFar / daysSoFar) * daysLeft : 0);
-    return { earnedC, outC, todayIndex, ahead, end, spentByDay };
-  }, [data, monthFrom, monthTo, now, txs, counts, monthDays, monthPlan, today]);
+    return { earnedC, outC, todayIndex, ahead, end, spentByDay, startIndex: Math.max(0, monthDays.indexOf(paceFrom)) };
+  }, [data, monthFrom, monthTo, now, txs, counts, monthDays, monthPlan, today, paceFrom]);
 
   // ---- Where the money went this month -------------------------------------
   const where = useMemo(() => {
@@ -440,7 +447,7 @@ export function Insights() {
             <span className="flex items-center gap-2">
               <span className="h-0.5 w-4 rounded-full" style={{ background: BUDGET_COLORS.spent }} /> Spent and set aside
             </span>
-            <span className="text-ink-3">Dashed = still to come</span>
+            {pace.startIndex > 0 && <span className="text-ink-3">Since {dayLabel(paceFrom)}</span>}
           </div>
           <div className="mt-4">
             <LineChart
@@ -452,6 +459,8 @@ export function Insights() {
               labels={monthDays.map((d) => String(Number(d.slice(8))))}
               titles={monthDays.map((d) => dayLabel(d))}
               actualUntil={pace.todayIndex}
+              startAt={pace.startIndex}
+              projections={false}
               labelEvery={5}
               format={money}
             />

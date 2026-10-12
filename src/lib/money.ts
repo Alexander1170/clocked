@@ -78,7 +78,7 @@ export function spentInSpans(txs: Transaction[], spans: Span[], hourly: boolean,
   const last = days[days.length - 1][1];
   for (const tx of txs) {
     if (tx.date < first || tx.date > last || !counts(tx)) continue;
-    const at = tx.at;
+    const at = txTime(tx);
     const i = hourly ? (at == null ? -1 : spans.findIndex((b) => at >= b.start && at < b.end)) : days.findIndex(([a, z]) => tx.date >= a && tx.date <= z);
     if (i >= 0) values[i] += tx.amount;
     else if (hourly) untimed += tx.amount;
@@ -201,6 +201,50 @@ export function splitDay(d: { earned: number; setAside: number; spent: number })
   };
 }
 
+/**
+ * When it happened, if anyone knows. Some banks stamp every transaction at
+ * midnight, which says nothing about the time of day.
+ */
+export function txTime(tx: Pick<Transaction, 'at' | 'source'>): number | undefined {
+  if (tx.at == null) return undefined;
+  if (tx.source === 'plaid') {
+    const d = new Date(tx.at);
+    if (d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0) return undefined;
+    if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0) return undefined;
+  }
+  return tx.at;
+}
+
+/** One day of money left, carried over from the days before. */
+export interface RollingDay {
+  day: LocalDate;
+  /** Left over from earlier days (negative when they ran short). */
+  carryIn: number;
+  earned: number;
+  setAside: number;
+  spent: number;
+  /** Moved to savings or toward a wish-list goal. */
+  moved: number;
+  /** What's left at the end of the day, carried into the next. */
+  left: number;
+}
+
+/**
+ * Money left, day by day, carried over: each day's pay less its set-asides,
+ * spending, and money moved to savings, added onto what was left the day
+ * before. A good day builds up; a short one comes off the next.
+ */
+export function rollingLeft(days: readonly LocalDate[], dayOf: (d: LocalDate) => Pick<RollingDay, 'earned' | 'setAside' | 'spent' | 'moved'>): RollingDay[] {
+  let carry = 0;
+  return days.map((day) => {
+    const v = dayOf(day);
+    const left = carry + v.earned - v.setAside - v.spent - v.moved;
+    const out = { day, carryIn: carry, ...v, left };
+    carry = left;
+    return out;
+  });
+}
+
 /** A purchase you added by hand and the bank's copy of it. */
 export interface Duplicate {
   manual: Transaction;
@@ -246,7 +290,7 @@ export function mergeDuplicate(bank: Transaction, manual: Transaction): Transact
     ...bank,
     categoryId: manual.categoryId,
     note: manual.note ?? bank.note,
-    at: bank.at ?? manual.at,
+    at: txTime(bank) ?? manual.at,
     billId: manual.billId ?? bank.billId,
     goalId: manual.goalId ?? bank.goalId,
     edited: true,

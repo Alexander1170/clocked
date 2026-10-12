@@ -49,6 +49,8 @@ app.post('/api/sync', bodyLimit({ maxSize: 20 * 1024 * 1024 }), async (c) => {
   if (!changes.every(isValidChange)) return c.json({ error: 'Bad change in batch' }, 400);
 
   if (changes.length) store.apply(changes);
+  // Logging or changing gig work, or teaching a place, can change which deposits are payouts.
+  if (changes.some((ch) => ch.c === 'gigs' || ch.c === 'jobs' || ch.c === 'rules' || ch.c === 'transactions' || ch.c === 'settings')) bank.linkGigPayouts();
   const page = store.since(since);
   return c.json<SyncResponse>(page);
 });

@@ -323,9 +323,51 @@ describe('bank sync against a fake Plaid', () => {
     expect(get('t17')!.billId).toBe('bill_gym');
   });
 
+  it('keeps a pending payout’s rule when it posts under another name, and matches payouts to logged work', async () => {
+    store.apply([
+      change('jobs', { id: 'job_gig', updatedAt: 1, kind: 'gig', name: 'Deliveries', color: 2 }),
+      change('gigs', { id: 'dash1', updatedAt: 1, jobId: 'job_gig', start: Date.parse('2026-10-08T18:00:00'), end: Date.parse('2026-10-08T21:00:00'), earnings: 41.25 }),
+      change('rules', { id: 'rule_instant', updatedAt: 1, match: 'instant credit', jobId: 'job_gig' }),
+    ]);
+    fake.pages[10] = {
+      added: [tx('t21', { amount: -30, merchant_name: null, name: 'INSTANT CREDIT', pending: true, authorized_date: '2026-10-08', datetime: '2026-10-08T00:00:00' })],
+      modified: [],
+      removed: [],
+    };
+    await bank.syncItem('item_1');
+    // Midnight is the bank saying nothing about the time.
+    expect(get('t21')).toMatchObject({ flow: 'income', jobId: 'job_gig' });
+    expect(get('t21')!.at).toBeUndefined();
+    fake.pages[11] = {
+      added: [
+        tx('t22', { amount: -30, merchant_name: null, name: 'POS CREDIT 77 Harbor Way Portland', pending: false, pending_transaction_id: 't21', authorized_date: '2026-10-08' }),
+        // No rule here, but it's the logged dash, less a $1.99 fee.
+        tx('t23', { amount: -39.26, merchant_name: null, name: 'POS CREDIT 77 Harbor Way Portland', authorized_date: '2026-10-09', personal_finance_category: { primary: 'OTHER', detailed: 'OTHER_OTHER' } }),
+      ],
+      modified: [],
+      removed: [{ transaction_id: 't21' }],
+    };
+    await bank.syncItem('item_1');
+    expect(get('t22')).toMatchObject({ flow: 'income', jobId: 'job_gig', ruleId: 'rule_instant', ruleCarried: true });
+    // A later bank update to the posted one keeps the rule it carried over.
+    fake.pages[12] = {
+      added: [],
+      modified: [tx('t22', { amount: -30, merchant_name: null, name: 'POS CREDIT 77 Harbor Way Portland', authorized_date: '2026-10-08' })],
+      removed: [],
+    };
+    await bank.syncItem('item_1');
+    expect(get('t22')).toMatchObject({ flow: 'income', jobId: 'job_gig', ruleId: 'rule_instant' });
+    expect(get('t23')).toMatchObject({ flow: 'income', jobId: 'job_gig', gigPayout: true });
+    // Deleting the dash puts the payout back the way the bank sent it.
+    store.apply([change('gigs', { id: 'dash1', updatedAt: 2, jobId: 'job_gig', start: 0, end: 1, earnings: 41.25, deleted: true })]);
+    bank.linkGigPayouts();
+    expect(get('t23')!.flow).toBe('spend');
+    expect(get('t23')!.jobId).toBeUndefined();
+  });
+
   it('counts a gig payout as pay you already logged, matched by its full description', async () => {
     store.apply([change('rules', { id: 'rule_payout', updatedAt: 1, match: 'pos credit 100 main street', jobId: 'job_gig', rename: 'Gig payout' })]);
-    fake.pages[10] = {
+    fake.pages[13] = {
       added: [
         tx('t19', { amount: -64.5, merchant_name: null, name: 'POS CREDIT 100 Main Street Springfield', personal_finance_category: { primary: 'OTHER', detailed: 'OTHER_OTHER' } }),
         tx('t20', { amount: -12, merchant_name: null, name: 'POS CREDIT 9 Elm Road Shelbyville', personal_finance_category: { primary: 'OTHER', detailed: 'OTHER_OTHER' } }),

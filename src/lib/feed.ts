@@ -1,5 +1,5 @@
 import type { Category, GigSession, Job, LocalDate, Transaction } from '../../shared/types.ts';
-import { isShown, notCountedReason, type Coverage } from './money.ts';
+import { isShown, notCountedReason, txTime, type Coverage } from './money.ts';
 import { hourlyChunks, valueIn, type Segment } from '../../shared/accrual.ts';
 import { dayEnd, dayStart, toLocalDate } from '../../shared/dates.ts';
 import { clock, hrs, timeRange } from './format.ts';
@@ -99,14 +99,15 @@ export function buildDayFeed({ date, segs, gigs, txs, jobs, cats, cover, now }: 
   for (const tx of txs) {
     if (!isShown(tx, cover.trackFrom) || tx.date !== date) continue;
     const cat = cats[tx.categoryId];
-    const when = tx.at ? clock(tx.at) : tx.pending ? 'Pending' : '';
+    const time = txTime(tx);
+    const when = time ? clock(time) : tx.pending ? 'Pending' : '';
     const muted = notCountedReason(tx, cover) ?? undefined;
     // A bill payment reads as the bill, not as a purchase.
     const bill = tx.billId ? cover.bills[tx.billId] : undefined;
     const paidBill = bill && !bill.deleted && tx.date >= bill.startDate ? bill : undefined;
     items.push({
       key: tx.id,
-      at: tx.at ?? d0,
+      at: time ?? d0,
       kind: tx.amount >= 0 ? 'expense' : 'refund',
       title: paidBill ? paidBill.name : tx.merchant || cat?.name || 'Expense',
       sub: paidBill ? `Bill paid${tx.billPart ? ' (part)' : ''} · ${tx.merchant}` : (muted ?? [cat?.name ?? 'Other', when].filter(Boolean).join(' · ')),

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Bill, Category, GigJob, Goal, Job, LocalDate, Move, Rule, Saving, ScheduledJob, Settings } from '../../shared/types.ts';
 import { planSetAsides, type SetAsidePlan } from '../../shared/plan.ts';
-import { makeSpendCheck, type Coverage, type SpendCheck } from './money.ts';
-import type { EngineData } from '../../shared/accrual.ts';
-import { addDays, toLocalDate } from '../../shared/dates.ts';
+import { makeSpendCheck, rollingLeft, type Coverage, type RollingDay, type SpendCheck } from './money.ts';
+import { buildSegments, tally, type EngineData } from '../../shared/accrual.ts';
+import { addDays, dayEnd, dayStart, eachDay, toLocalDate } from '../../shared/dates.ts';
 import { paidLog, upcomingPaychecks, type PaidLog } from '../../shared/bills.ts';
 import { lastPaydayOnOrBefore, nextPaydayOnOrAfter, paydaysBetween } from '../../shared/pay.ts';
 import { checkAmount, spentBetween } from './money.ts';
@@ -276,4 +276,68 @@ export function useUntilPayday(now: number): PaydayStretch | null {
     }
     return { ...base, ...untilPayday({ ...cur, today, nextPayday, carry }), fromBank: null };
   }, [job, lastPayday, nextPayday, paydays, data, now, bills, plan, txs, counts, today, bank, paid]);
+}
+
+/** Money left, carried over day to day (see rollingLeft), from the day you started tracking through today. */
+export interface Rolling {
+  /** The first day that counts. */
+  anchor: LocalDate;
+  days: Map<LocalDate, RollingDay>;
+  today: RollingDay;
+}
+
+/**
+ * Money left, carried over day to day from the day you started tracking. Days
+ * before today only change when your data does; today's pay builds by the
+ * minute.
+ */
+export function useRollingLeft(now: number): Rolling {
+  const today = toLocalDate(now);
+  const { trackFrom } = useSettings();
+  const txs = useTransactions();
+  const counts = useSpendCheck();
+  const data = useEngineData();
+  const moves = useMoves();
+  const anchor = useMemo(() => {
+    if (trackFrom) return trackFrom < today ? trackFrom : today;
+    // Without a start date, from when you started using Clocked: the first job you added, or the first
+    // spending or work you logged yourself. Bank history from before then doesn't count.
+    let first = today;
+    for (const j of data.jobs) if (j.createdAt && toLocalDate(j.createdAt) < first) first = toLocalDate(j.createdAt);
+    for (const t of txs) if (t.source !== 'plaid' && t.date < first && counts(t)) first = t.date;
+    for (const g of data.gigs) if (!g.deleted && toLocalDate(g.start) < first) first = toLocalDate(g.start);
+    return first;
+  }, [trackFrom, today, txs, counts, data.jobs, data.gigs]);
+  const plan = useSetAsidePlan(anchor, today);
+  const perDay = useMemo(() => {
+    const spent = new Map<LocalDate, number>();
+    for (const t of txs) if (t.date >= anchor && t.date <= today && counts(t)) spent.set(t.date, (spent.get(t.date) ?? 0) + t.amount);
+    const moved = new Map<LocalDate, number>();
+    for (const m of moves) if (m.to !== 'kept' && m.date >= anchor && m.date <= today) moved.set(m.date, (moved.get(m.date) ?? 0) + m.amount);
+    return { spent, moved };
+  }, [txs, counts, moves, anchor, today]);
+  // Days before today are settled, so they don't need the clock, unless a dash that started then is still going.
+  const running = data.gigs.some((g) => !g.deleted && g.end == null);
+  const pastNow = running ? now : dayStart(today);
+  const past = useMemo(() => {
+    const yesterday = addDays(today, -1);
+    if (yesterday < anchor) return [] as RollingDay[];
+    const segs = buildSegments(data, anchor, yesterday, pastNow);
+    return rollingLeft(eachDay(anchor, yesterday), (d) => ({
+      earned: tally(segs, dayStart(d), dayEnd(d), pastNow).value,
+      setAside: plan.byDay.get(d) ?? 0,
+      spent: perDay.spent.get(d) ?? 0,
+      moved: perDay.moved.get(d) ?? 0,
+    }));
+  }, [data, anchor, today, plan, perDay, pastNow]);
+  const segsToday = useMemo(() => buildSegments(data, today, today, now), [data, today, now]);
+  return useMemo(() => {
+    const carryIn = past.length ? past[past.length - 1].left : 0;
+    const earned = tally(segsToday, dayStart(today), dayEnd(today), now).value;
+    const setAside = plan.byDay.get(today) ?? 0;
+    const spent = perDay.spent.get(today) ?? 0;
+    const moved = perDay.moved.get(today) ?? 0;
+    const row: RollingDay = { day: today, carryIn, earned, setAside, spent, moved, left: carryIn + earned - setAside - spent - moved };
+    return { anchor, days: new Map([...past, row].map((r) => [r.day, r])), today: row };
+  }, [past, segsToday, today, now, plan, perDay, anchor]);
 }

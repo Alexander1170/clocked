@@ -17,6 +17,7 @@ import {
   useSpendCheck,
   usePaidLog,
   useTransactions,
+  useRollingLeft,
   useUntilPayday,
   isGig,
   isScheduled,
@@ -192,7 +193,11 @@ export function Today() {
     ] as const
   ).filter(([, v]) => v > 0.005);
   const hasPlans = Object.keys(cover.bills).length + Object.keys(cover.goals).length > 0 || setAside > 0;
-  const left = t.value - spent - setAside;
+  // What's left carries over: a good day builds up, a short one comes off the next.
+  const rolling = useRollingLeft(now);
+  const carried = rolling.today.carryIn;
+  const moved = rolling.today.moved;
+  const left = rolling.today.left;
   const perMin = ratePerMinute(segs, now);
   const scheduledToday = segs.filter((s) => s.kind !== 'gig' && s.end > dayStart(today) && s.start < dayEnd(today));
   const nextStart = scheduledToday.filter((s) => s.start > now).sort((a, b) => a.start - b.start)[0]?.start ?? null;
@@ -291,6 +296,15 @@ export function Today() {
 
             <Card className="mt-3 overflow-hidden">
               <div className="divide-y divide-line">
+                {rolling.anchor < today && (
+                  <div className="flex items-center justify-between gap-3 px-4 py-3 text-[15px]">
+                    <span className="min-w-0">
+                      <span className="block text-ink-2">Carried over</span>
+                      <span className="block truncate text-[12px] text-ink-3">Left from the days before, since {dayLabel(rolling.anchor)}</span>
+                    </span>
+                    <span className={clsx('num shrink-0 font-semibold', carried < 0 && 'text-spend')}>{signed(carried)}</span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between px-4 py-3 text-[15px]">
                   <span className="text-ink-2">Earned so far</span>
                   <span className="num font-semibold">{signed(t.value)}</span>
@@ -312,6 +326,12 @@ export function Today() {
                   </span>
                   <span className="num shrink-0 font-semibold">{setAside > 0 ? minus(setAside) : hasPlans ? '$0.00' : 'Add bills and goals'}</span>
                 </button>
+                {moved > 0.005 && (
+                  <div className="flex items-center justify-between px-4 py-3 text-[15px]">
+                    <span className="text-ink-2">Moved to savings</span>
+                    <span className="num font-semibold">{minus(moved)}</span>
+                  </div>
+                )}
               </div>
               <div className="flex items-center justify-between border-t border-line bg-raised/50 px-4 py-3.5">
                 <span className="text-[15px] font-semibold">Left today</span>

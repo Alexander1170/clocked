@@ -139,6 +139,14 @@ export interface Transaction extends BaseRecord {
   rawName?: string;
   /** Income matched to a job, so it isn't counted twice. */
   jobId?: string;
+  /** A gig payout matched to work you logged, so it's pay already counted. Rechecked as you log or change work. */
+  gigPayout?: boolean;
+  /** Was matched as a gig payout before and you'd edited it, so it can be matched again if the work comes back. */
+  wasPayout?: boolean;
+  /** You said this deposit isn't a gig payout, so it's never matched to your work. */
+  notPayout?: boolean;
+  /** Its rule came from the pending charge it replaced, which the bank named differently. */
+  ruleCarried?: boolean;
 }
 
 export type TxFlow = 'spend' | 'income' | 'transfer';

@@ -4,12 +4,12 @@ import { ChevronLeft, ChevronRight, CircleAlert, CopyCheck, Landmark, PiggyBank,
 import type { Bill, LocalDate, Transaction } from '../../shared/types.ts';
 import { buildSegments, tally } from '../../shared/accrual.ts';
 import type { SetAsideKind } from '../../shared/plan.ts';
-import { toLocalDate } from '../../shared/dates.ts';
-import { useBillMap, useCategories, useCategoryMap, useCategoryOf, useCoverage, useEngineData, useNow, useSetAsidePlan, useSettings, useSpendCheck, useTransactions } from '../lib/hooks.ts';
+import { dayStart, toLocalDate } from '../../shared/dates.ts';
+import { useBillMap, useCategories, useCategoryMap, useCategoryOf, useCoverage, useEngineData, useNow, useRollingLeft, useSetAsidePlan, useSettings, useSpendCheck, useTransactions } from '../lib/hooks.ts';
 import { bucketIndexAt, bucketsFor, periodBounds, periodTitle, shiftAnchor, type Range } from '../lib/periods.ts';
 import { categoryIcon } from '../lib/categories.ts';
 import { clock, dayLabel, minus, money, relativeDay, signed } from '../lib/format.ts';
-import { findDuplicates, isShown, notCountedReason, setAsideInSpans, spentInSpans } from '../lib/money.ts';
+import { findDuplicates, isShown, notCountedReason, setAsideInSpans, spentInSpans, txTime } from '../lib/money.ts';
 import { bankApi, useBank } from '../lib/bank.ts';
 import { go, openSheet, toast } from '../lib/ui.ts';
 import { BarChart, type BarDatum } from '../components/BarChart.tsx';
@@ -44,7 +44,7 @@ function TxRow({ tx }: { tx: Transaction }) {
   const bill = tx.billId ? bills[tx.billId] : undefined;
   const sub =
     reason ??
-    [cat?.name ?? 'Other', bill && !bill.deleted ? `${bill.name} payment${tx.billPart ? ' (part)' : ''}` : null, tx.at ? clock(tx.at) : null, tx.pending ? 'Pending' : null]
+    [cat?.name ?? 'Other', bill && !bill.deleted ? `${bill.name} payment${tx.billPart ? ' (part)' : ''}` : null, txTime(tx) ? clock(txTime(tx)!) : null, tx.pending ? 'Pending' : null]
       .filter(Boolean)
       .join(' · ');
   return (
@@ -152,76 +152,102 @@ export function Spending() {
 
   const { from, to } = periodBounds(range, anchor, weekStartsOn);
   const plan = useSetAsidePlan(from, to);
+  const rolling = useRollingLeft(now);
+  // Counting starts the day you started tracking. Days before that, and ones that
+  // haven't happened yet, aren't drawn or counted.
+  const start = rolling.anchor;
+  const startMs = dayStart(start);
   const buckets = useMemo(() => bucketsFor(range, anchor, weekStartsOn), [range, anchor, weekStartsOn]);
+  const tracked = useMemo(() => buckets.map((b) => b.end > startMs && b.start <= now), [buckets, startMs, now]);
+  const spans = useMemo(() => buckets.map((b) => ({ start: Math.max(b.start, startMs), end: b.end })), [buckets, startMs]);
   const nowIndex = bucketIndexAt(buckets, now);
   const isCurrent = nowIndex >= 0;
   const windowKey = `${range}|${anchor}|${weekStartsOn}`;
   const sel = picked?.key === windowKey ? picked.i : isCurrent ? nowIndex : null;
-  const select = (i: number) => setPicked({ key: windowKey, i: sel === i ? null : i });
+  const select = (i: number) => {
+    if (!tracked[i]) return;
+    setPicked({ key: windowKey, i: sel === i ? null : i });
+  };
   const unit = UNIT[range];
 
   const segs = useMemo(() => buildSegments(data, from, to, now), [data, from, to, now]);
-  const earnedIn = useMemo(() => buckets.map((b) => tally(segs, b.start, b.end, now)), [buckets, segs, now]);
+  const earnedIn = useMemo(() => spans.map((s, i) => tally(segs, s.start, tracked[i] ? s.end : s.start, now)), [spans, tracked, segs, now]);
   // "Left" is about all your money, so the category filter only narrows the Spent view.
   const spendCounts = useCallback(
     (tx: Transaction) => counts(tx) && (mode === 'left' || !catFilter || catOf(tx.categoryId) === catFilter),
     [counts, mode, catFilter, catOf],
   );
-  const spentIn = useMemo(() => spentInSpans(txs, buckets, range === 'day', spendCounts), [txs, buckets, range, spendCounts]);
+  const spentIn = useMemo(() => {
+    const s = spentInSpans(txs, spans, range === 'day', spendCounts);
+    return { values: s.values.map((v, i) => (tracked[i] ? v : 0)), untimed: s.untimed };
+  }, [txs, spans, range, spendCounts, tracked]);
+  // Hour bars split the day's set-aside by each hour's scheduled pay, hours still to come included.
+  const hourlyPay = useMemo(
+    () => (range === 'day' ? spans.map((s) => { const t = tally(segs, s.start, s.end, now); return t.value + t.projected; }) : undefined),
+    [range, spans, segs, now],
+  );
   const asideIn = useMemo(
-    () => setAsideInSpans(plan, buckets, today, range === 'day' ? earnedIn.map((e) => e.value + e.projected) : undefined),
-    [plan, buckets, today, range, earnedIn],
+    () =>
+      setAsideInSpans(plan, spans, today, hourlyPay).map((a, i) =>
+        tracked[i] ? a : { total: 0, kinds: { bills: 0, savings: 0, goals: 0 } },
+      ),
+    [plan, spans, today, hourlyPay, tracked],
   );
 
+  // The tracked part of this period: from the later of its start and the day you started, through today.
+  const firstDay = from > start ? from : start;
+  const lastDay = to < today ? to : today;
+  const counting = firstDay <= lastDay;
   const spent = spentIn.values.reduce((t, v) => t + v, 0) + spentIn.untimed;
   const earned = earnedIn.reduce((t, e) => t + e.value, 0);
-  const stillScheduled = earnedIn.reduce((t, e) => t + e.projected, 0);
   let asideSoFar = 0;
   let asideTotal = 0;
   for (const [d, v] of plan.byDay) {
-    if (d < from || d > to) continue;
+    if (d < firstDay || d > to) continue;
     asideTotal += v;
     if (d <= today) asideSoFar += v;
   }
-  const left = earned - spent - asideSoFar;
-  const onTrack = earned + stillScheduled - spent - asideTotal;
-  const unfinished = stillScheduled > 0.005 || asideTotal - asideSoFar > 0.005;
+  let moved = 0;
+  for (const [d, r] of rolling.days) if (d >= firstDay && d <= lastDay) moved += r.moved;
+  // What's left carries over day to day, so it starts from what the days before left.
+  const carriedIn = counting ? (rolling.days.get(firstDay)?.carryIn ?? 0) : 0;
+  const left = counting ? (rolling.days.get(lastDay)?.left ?? 0) : 0;
+  const ahead = buckets.reduce((t, b) => t + (b.end > now && b.end > startMs ? tally(segs, Math.max(b.start, startMs, now), b.end, now).projected : 0), 0);
+  const onTrack = left + ahead - (asideTotal - asideSoFar);
+  const unfinished = counting && (ahead > 0.005 || asideTotal - asideSoFar > 0.005);
 
-  const spentChart: BarDatum[] = buckets.map((b, i) => {
-    const future = b.start > now;
-    const aside = asideIn[i].total;
-    return {
-      key: b.key,
-      label: b.label,
-      title: b.title,
-      current: i === nowIndex,
-      parts: [
-        { id: 'spent', name: 'Spent', color: BUDGET_COLORS.spent, value: Math.max(0, spentIn.values[i]) },
-        { id: 'aside', name: 'Set aside', color: BUDGET_COLORS.setAside, value: future ? 0 : aside, projected: future ? aside : 0 },
-      ],
-    };
-  });
+  const spentChart: BarDatum[] = buckets.map((b, i) => ({
+    key: b.key,
+    label: b.label,
+    title: b.title,
+    current: i === nowIndex,
+    blank: !tracked[i],
+    parts: [
+      { id: 'spent', name: 'Spent', color: BUDGET_COLORS.spent, value: Math.max(0, spentIn.values[i]) },
+      { id: 'aside', name: 'Set aside', color: BUDGET_COLORS.setAside, value: asideIn[i].total },
+    ],
+  }));
   const leftChart: BudgetDay[] = buckets.map((b, i) => {
-    const future = b.start > now;
+    const base = { key: b.key, label: b.label, title: b.title, current: i === nowIndex };
+    if (!tracked[i]) return { ...base, earned: 0, setAside: 0, spent: 0, blank: true };
     const aside = asideIn[i];
+    const end = toLocalDate(Math.min(b.end, now + 1) - 1);
     return {
-      key: b.key,
-      label: b.label,
-      title: b.title,
-      current: i === nowIndex,
-      projected: future,
-      earned: earnedIn[i].value + (future ? earnedIn[i].projected : 0),
+      ...base,
+      earned: earnedIn[i].value,
       setAside: aside.total,
       setAsideParts: KINDS.map(([k, name]) => ({ name, value: aside.kinds[k] })).filter((p) => p.value > 0.005),
       spent: spentIn.values[i],
+      // Hour bars share their day's carryover, so only days and months show it.
+      running: range === 'day' ? undefined : rolling.days.get(end)?.left,
     };
   });
 
   const byCat = useMemo(() => {
     const m = new Map<string, number>();
-    for (const tx of txs) if (tx.date >= from && tx.date <= to && counts(tx)) m.set(catOf(tx.categoryId), (m.get(catOf(tx.categoryId)) ?? 0) + tx.amount);
+    for (const tx of txs) if (tx.date >= firstDay && tx.date <= to && counts(tx)) m.set(catOf(tx.categoryId), (m.get(catOf(tx.categoryId)) ?? 0) + tx.amount);
     return [...m.entries()].filter(([, v]) => v > 0.005).sort((a, b) => b[1] - a[1]);
-  }, [txs, from, to, counts, catOf]);
+  }, [txs, firstDay, to, counts, catOf]);
   const catTotal = byCat.reduce((t, [, v]) => t + v, 0);
 
   // The Day view always lists the whole day. The others narrow to the picked bar.
@@ -232,7 +258,7 @@ export function Spending() {
   const counted = (tx: Transaction) => counts(tx) && (!catFilter || catOf(tx.categoryId) === catFilter);
   const shown = txs
     .filter((tx) => isShown(tx, trackFrom) && tx.date >= listFrom && tx.date <= listTo && (!catFilter || catOf(tx.categoryId) === catFilter))
-    .sort((a, b) => b.date.localeCompare(a.date) || (b.at ?? 0) - (a.at ?? 0));
+    .sort((a, b) => b.date.localeCompare(a.date) || (txTime(b) ?? 0) - (txTime(a) ?? 0));
   // Bill payments aren't spending: their set-asides cover them, so they're listed apart.
   const paidBill = (tx: Transaction) => {
     const b = tx.billId ? billMap[tx.billId] : undefined;
@@ -246,7 +272,7 @@ export function Spending() {
   const listTitle = oneDay ? dayHeading(oneDay) : listBucket ? listBucket.title : 'Transactions';
   const newExpenseDate = oneDay ?? today;
 
-  const selBar = sel != null ? leftChart[sel] : undefined;
+  const selBar = sel != null && !leftChart[sel]?.blank ? leftChart[sel] : undefined;
   const selLeft = selBar ? selBar.earned - selBar.setAside - selBar.spent : 0;
   let heading = 'Left';
   if (mode === 'spent') heading = catFilter ? (cats.find((c) => c.id === catFilter)?.name ?? 'Spent') : 'Spent';
@@ -316,9 +342,15 @@ export function Spending() {
             <p className={clsx('num mt-1 text-[44px] leading-none font-bold tracking-tight', mode === 'left' && (left >= 0 ? 'text-money' : 'text-spend'))}>
               {mode === 'left' ? signed(left) : money(spent)}
             </p>
-            <p className="num mt-2.5 text-[14px] text-ink-2">
-              Earned {money(earned)} · spent {money(spent)} · set aside {money(mode === 'left' ? asideSoFar : asideTotal)}
-            </p>
+            {counting ? (
+              <p className="num mt-2.5 text-[14px] text-ink-2">
+                {mode === 'left' && Math.abs(carriedIn) > 0.005 && `Carried over ${signed(carriedIn)} · `}
+                Earned {money(earned)} · spent {money(spent)} · set aside {money(mode === 'left' ? asideSoFar : asideTotal)}
+                {mode === 'left' && moved > 0.005 && ` · moved to savings ${money(moved)}`}
+              </p>
+            ) : (
+              <p className="mt-2.5 text-[14px] text-ink-2">{lastDay < start ? `Nothing to count yet: you started ${dayLabel(start)}.` : 'This hasn’t happened yet.'}</p>
+            )}
             {mode === 'left' && unfinished && (
               <p className="num mt-1 text-[14px] text-ink-2">
                 On track for <span className="font-semibold text-ink">{signed(onTrack)}</span> by the end of the {range}
@@ -368,6 +400,11 @@ export function Spending() {
                 </div>
                 {!!selBar.setAsideParts?.length && (
                   <p className="num mt-3 text-center text-[12px] text-ink-3">{selBar.setAsideParts.map((p) => `${p.name} ${money(p.value)}`).join(' · ')}</p>
+                )}
+                {selBar.running != null && (
+                  <p className="num mt-2 text-center text-[13px] text-ink-2">
+                    With what carried over, <span className={clsx('font-semibold', selBar.running >= 0 ? 'text-money' : 'text-spend')}>{signed(selBar.running)}</span> left by the end of it
+                  </p>
                 )}
               </div>
             )}

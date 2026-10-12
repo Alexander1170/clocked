@@ -16,6 +16,10 @@ export interface BudgetDay {
   spent: number;
   /** A future day: pay is only scheduled, so the bar is faded. */
   projected?: boolean;
+  /** Nothing to draw: it hasn't happened yet, or it's before you started tracking. */
+  blank?: boolean;
+  /** Money left by the end of it, carried over from the days before. */
+  running?: number;
   current?: boolean;
 }
 
@@ -100,14 +104,18 @@ export function NetChart({
   ];
 
   const onKey = (e: KeyboardEvent, i: number) => {
-    const next = e.key === 'ArrowRight' ? i + 1 : e.key === 'ArrowLeft' ? i - 1 : null;
-    if (next == null || next < 0 || next >= data.length) return;
+    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+    if (!step) return;
+    // Skip days with nothing to show.
+    let next = i + step;
+    while (next >= 0 && next < data.length && data[next].blank) next += step;
+    if (next < 0 || next >= data.length) return;
     e.preventDefault();
     onSelect(next);
     (e.currentTarget.parentElement?.children[next] as HTMLElement | undefined)?.focus();
   };
 
-  const tip = hover != null && data[hover] ? { d: data[hover], b: bars[hover], i: hover } : null;
+  const tip = hover != null && data[hover] && !data[hover].blank ? { d: data[hover], b: bars[hover], i: hover } : null;
 
   return (
     <div className="relative select-none" role="group" aria-label={ariaLabel}>
@@ -133,12 +141,13 @@ export function NetChart({
               <button
                 key={d.key}
                 onClick={() => onSelect(i)}
+                disabled={d.blank}
                 onKeyDown={(e) => onKey(e, i)}
                 onPointerEnter={(e) => e.pointerType === 'mouse' && setHover(i)}
                 onPointerLeave={() => setHover(null)}
                 onFocus={() => setHover(i)}
                 onBlur={() => setHover(null)}
-                aria-label={`${d.title}: ${d.projected ? 'scheduled' : 'earned'} ${money(d.earned)}, set aside ${money(d.setAside)}, spent ${money(d.spent)}, ${signed(b.net)} left`}
+                aria-label={d.blank ? `${d.title}: nothing yet` : `${d.title}: ${d.projected ? 'scheduled' : 'earned'} ${money(d.earned)}, set aside ${money(d.setAside)}, spent ${money(d.spent)}, ${signed(b.net)} left`}
                 aria-pressed={on}
                 className="group relative h-full min-w-0 flex-1 outline-none"
               >
@@ -166,7 +175,7 @@ export function NetChart({
                       />
                     ))}
                   </span>
-                  {!b.up.length && !b.down.length && (
+                  {!b.up.length && !b.down.length && !d.blank && (
                     <span className="absolute left-1/2 h-[2px] w-[64%] max-w-6 -translate-x-1/2 rounded-full bg-grid" style={{ top: zero - 1 }} />
                   )}
                 </span>
@@ -222,6 +231,13 @@ export function NetChart({
             <Swatch color={BUDGET_COLORS.left} />
             <span className="font-medium">Left</span>
             <span className="text-right text-[13px] font-semibold">{signed(tip.b.net)}</span>
+            {tip.d.running != null && (
+              <>
+                <Swatch />
+                <span className="text-ink-2">With carryover</span>
+                <span className="text-right font-semibold">{signed(tip.d.running)}</span>
+              </>
+            )}
           </div>
           {tip.d.projected && <p className="mt-1.5 text-[12px] text-ink-3">If you work as scheduled</p>}
         </div>

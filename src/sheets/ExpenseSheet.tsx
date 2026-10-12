@@ -10,7 +10,7 @@ import { useBills, useCategoryMap, useCoverage, useGoals, useRules, useTransacti
 import { FALLBACK_CATEGORY } from '../lib/categories.ts';
 import { newId } from '../lib/ids.ts';
 import { dayLabel, minus, money, monthDay, signed } from '../lib/format.ts';
-import { findDuplicates, notCountedReason } from '../lib/money.ts';
+import { findDuplicates, notCountedReason, txTime } from '../lib/money.ts';
 import { placeRuleId, teachable } from '../lib/places.ts';
 import { markDifferent, mergePair, teachRule } from '../lib/teach.ts';
 import { closeSheet, toast, useSheets } from '../lib/ui.ts';
@@ -44,7 +44,8 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
   // A category deleted since this was tagged reads as none picked, so saving files it under Other.
   const [categoryId, setCategoryId] = useState(existing && liveCats[existing.categoryId] ? existing.categoryId : '');
   const [day, setDay] = useState(existing?.date ?? date ?? today);
-  const [time, setTime] = useState(existing?.at ? timeOf(existing.at) : (date ?? today) === today ? timeOf(Date.now()) : '');
+  const known = existing ? txTime(existing) : undefined;
+  const [time, setTime] = useState(known ? timeOf(known) : existing ? '' : (date ?? today) === today ? timeOf(Date.now()) : '');
   const [note, setNote] = useState(existing?.note ?? '');
   const [counted, setCounted] = useState(existing ? !existing.excluded && (existing.flow ?? 'spend') === 'spend' : true);
   const [billId, setBillId] = useState<string | undefined>(existing?.billId);
@@ -137,6 +138,12 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
     if (counted) {
       delete rec.excluded;
       rec.flow = 'spend';
+      // You said this deposit counts, so it isn't pay you'd logged: never match it to your work again.
+      if (existing?.jobId) {
+        delete rec.jobId;
+        delete rec.gigPayout;
+        rec.notPayout = true;
+      }
     } else if (!notCountedReason({ ...rec, excluded: undefined }, cover)) {
       rec.excluded = true;
     }
@@ -147,6 +154,7 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
     if (nameChanged) mine.push('name');
     if (categoryChanged) mine.push('category');
     if (billChanged) mine.push('bill');
+    if (counted && existing?.jobId) mine.push('pay');
     rec = releaseFromRule(rec, mine);
     rec = put('transactions', rec);
 

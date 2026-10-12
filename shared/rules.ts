@@ -89,6 +89,8 @@ export function withRule(tx: Transaction, rule: Rule | undefined, bills: readonl
     if (rule.jobId && !moneyOut) {
       out.flow = 'income';
       out.jobId = rule.jobId;
+      delete out.gigPayout;
+      delete out.wasPayout;
       set.push('pay');
     }
     out.ruleId = rule.id;

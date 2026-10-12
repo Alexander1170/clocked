@@ -5,7 +5,9 @@ import type { Store } from './db.ts';
 import { plaidClient, PlaidError, type PlaidAccount, type PlaidClient, type PlaidEnv, type PlaidTransaction } from './plaid.ts';
 import { cleanName, findManualMatch, mapPlaidTransaction } from './categorize.ts';
 import { billForPayment, paysBill } from '../shared/bills.ts';
-import { bankNameOf, ruleFor } from '../shared/rules.ts';
+import { bankNameOf, ruleFor, withRule } from '../shared/rules.ts';
+import { matchGigPayouts } from '../shared/payouts.ts';
+import { flowForDetailed } from '../shared/plaidCategories.ts';
 import type { Change, Transaction } from '../shared/types.ts';
 
 const DAYS_REQUESTED = 180;
@@ -277,7 +279,10 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
         const existing = store.get('transactions', `plaid_${r.transaction_id}`);
         if (existing && !existing.deleted) changes.push({ c: 'transactions', rec: { ...existing, deleted: true, updatedAt: Math.max(now, existing.updatedAt + 1) } });
       }
-      if (changes.length) store.apply(changes);
+      if (changes.length) {
+        store.apply(changes);
+        linkGigPayouts();
+      }
       update(itemId, { cursor, accounts: JSON.stringify(accountInfos), status: 'ok', error: null, synced_at: now, update_status: updateStatus });
       if (added.length || modified.length || removed.length)
         log(`${item.institution ?? itemId}: +${added.length} ~${modified.length} -${removed.length}`);
@@ -345,6 +350,47 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
     for (const r of rows()) await syncItem(r.item_id);
     reconcileAccounts();
     linkBillPayments();
+    linkGigPayouts();
+  }
+
+  /**
+   * Marks gig payouts as pay you already counted: deposits that match work you
+   * logged. One that stops matching (you changed or deleted the work) goes
+   * back to what the bank called it. Ones you edited stay as you left them.
+   */
+  function linkGigPayouts() {
+    const txs = store.all('transactions');
+    const trackFrom = store.get('settings', 'main')?.trackFrom;
+    const rules = store.all('rules');
+    const bills = store.all('bills');
+    const matched = matchGigPayouts(txs, store.all('gigs'), store.all('jobs'), trackFrom);
+    const now = Date.now();
+    const changes: Change[] = [];
+    for (const tx of txs) {
+      // A payout you edited stays matched to its work; anything else you edited is yours.
+      if (tx.source !== 'plaid' || tx.deleted || (tx.edited && !tx.gigPayout)) continue;
+      const jobId = matched.get(tx.id);
+      if (jobId && (!tx.gigPayout || tx.jobId !== jobId || tx.flow !== 'income')) {
+        const rec: Transaction = { ...tx, flow: 'income', jobId, gigPayout: true, updatedAt: Math.max(now, tx.updatedAt + 1) };
+        delete rec.wasPayout;
+        changes.push({ c: 'transactions', rec });
+      } else if (!jobId && tx.gigPayout) {
+        // Hidden, switched off, or from before you started: it doesn't count either way, so leave it.
+        if (tx.hidden || tx.accountOff || (trackFrom && tx.date < trackFrom)) continue;
+        let rec: Transaction = { ...tx, flow: flowForDetailed(tx.amount, tx.pfc), updatedAt: Math.max(now, tx.updatedAt + 1) };
+        delete rec.jobId;
+        delete rec.gigPayout;
+        // One you'd edited can match again if its work comes back.
+        if (tx.edited) rec.wasPayout = true;
+        // A place you taught as pay stays pay.
+        rec = withRule(rec, ruleFor(rules, bankNameOf(rec), rec.rawName), bills);
+        changes.push({ c: 'transactions', rec });
+      }
+    }
+    if (changes.length) {
+      store.apply(changes);
+      log(`matched ${changes.length} gig payouts to logged work`);
+    }
   }
 
   /**
@@ -448,6 +494,7 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
     saveConfig,
     syncItem,
     syncAll,
+    linkGigPayouts,
     refresh,
     setAccountIncluded,
     removeItem,

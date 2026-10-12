@@ -4,7 +4,7 @@ import { CalendarCog, ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import type { Job, LocalDate } from '../../shared/types.ts';
 import { buildSegments, tally, type Segment, type Tally } from '../../shared/accrual.ts';
 import { addDays, dayEnd, dayStart, endOfMonth, toLocalDate } from '../../shared/dates.ts';
-import { useEngineData, useJobs, useNow, useSetAsidePlan, useSettings, useSpendCheck, useTransactions } from '../lib/hooks.ts';
+import { useEngineData, useJobs, useNow, useRollingLeft, useSetAsidePlan, useSettings, useSpendCheck, useTransactions } from '../lib/hooks.ts';
 import { bucketIndexAt, bucketsFor, periodBounds, periodTitle, shiftAnchor, type Bucket, type Range } from '../lib/periods.ts';
 import { slotColor } from '../lib/colors.ts';
 import { hrs, minus, money, moneyWhole, signed, timeRange } from '../lib/format.ts';
@@ -37,10 +37,32 @@ function Row({ color, title, sub, amount, action }: { color?: number; title: str
 }
 
 /** What happened on one day, job by job, plus spending: the chart's table view. */
-function DayDetail({ date, segs, jobs, now, spent, bills }: { date: LocalDate; segs: Segment[]; jobs: Job[]; now: number; spent: number; bills: number }) {
+/** Money left with carryover, for the part of a day or period you've tracked. */
+interface Carry {
+  carryIn: number;
+  moved: number;
+  left: number;
+}
+
+/** The carried-over rows: what came in from before, and what's left with it. Nothing outside the days you've tracked. */
+function LeftRows({ carry, label, spent, bills }: { carry?: Carry; label: string; spent: number; bills: number }) {
+  if (!carry) return null;
+  return (
+    <>
+      <Row title="Carried over" sub="Left from the days before" amount={signed(carry.carryIn)} />
+      <Row title="Spent" sub="Manual and bank" amount={minus(spent)} />
+      <Row title="Set aside" sub="Bills, savings, and wish list" amount={minus(bills)} />
+      {carry.moved > 0.005 && <Row title="Moved to savings" amount={minus(carry.moved)} />}
+      <div className="flex items-center justify-between py-3 font-semibold">
+        <span className="pl-[22px] text-[15px]">{label}</span>
+        <span className={clsx('num text-[15px]', carry.left >= 0 ? 'text-money' : 'text-spend')}>{signed(carry.left)}</span>
+      </div>
+    </>
+  );
+}
+
+function DayDetail({ date, segs, jobs, now, spent, bills, carry }: { date: LocalDate; segs: Segment[]; jobs: Job[]; now: number; spent: number; bills: number; carry?: Carry }) {
   const d0 = dayStart(date);
-  const d1 = dayEnd(date);
-  const t = tally(segs, d0, d1, now);
   const rows: React.ReactNode[] = [];
   for (const job of jobs) {
     if (job.kind === 'scheduled') {
@@ -88,18 +110,14 @@ function DayDetail({ date, segs, jobs, now, spent, bills }: { date: LocalDate; s
   return (
     <div className="divide-y divide-line">
       {rows.length ? rows : <p className="py-4 text-[14px] text-ink-2">No work on this day.</p>}
-      <Row title="Spent" sub="Manual and bank" amount={minus(spent)} />
-      <Row title="Set aside" sub="Bills, savings, and wish list" amount={minus(bills)} />
-      <div className="flex items-center justify-between py-3 font-semibold">
-        <span className="pl-[22px] text-[15px]">Left for the day</span>
-        <span className={clsx('num text-[15px]', t.value - spent - bills >= 0 ? 'text-money' : 'text-spend')}>{signed(t.value - spent - bills)}</span>
-      </div>
+      <LeftRows carry={carry} label="Left at the end of the day" spent={spent} bills={bills} />
     </div>
   );
 }
 
-function PeriodDetail({ bucket, segs, jobs, now, spent, bills }: { bucket: Bucket; segs: Segment[]; jobs: Job[]; now: number; spent: number; bills: number }) {
-  const t = tally(segs, bucket.start, bucket.end, now);
+function PeriodDetail({ bucket, segs, jobs, now, spent, bills, carry, start }: { bucket: Bucket; segs: Segment[]; jobs: Job[]; now: number; spent: number; bills: number; carry?: Carry; start: number }) {
+  // Like the rest of it, pay counts from the day you started tracking.
+  const t = tally(segs, Math.max(bucket.start, start), bucket.end, now);
   return (
     <div className="divide-y divide-line">
       {jobs
@@ -116,12 +134,7 @@ function PeriodDetail({ bucket, segs, jobs, now, spent, bills }: { bucket: Bucke
             />
           );
         })}
-      <Row title="Spent" amount={minus(spent)} />
-      <Row title="Set aside" amount={minus(bills)} />
-      <div className="flex items-center justify-between py-3 font-semibold">
-        <span className="pl-[22px] text-[15px]">Left</span>
-        <span className={clsx('num text-[15px]', t.value - spent - bills >= 0 ? 'text-money' : 'text-spend')}>{signed(t.value - spent - bills)}</span>
-      </div>
+      <LeftRows carry={carry} label="Left at the end of it" spent={spent} bills={bills} />
     </div>
   );
 }
@@ -141,6 +154,16 @@ export function Earnings() {
 
   const { from, to } = periodBounds(range, anchor, weekStartsOn);
   const plan = useSetAsidePlan(from, to);
+  const rolling = useRollingLeft(now);
+  /** What carried in and what's left, over the tracked part of [a, b]: from the day you started, through today. */
+  const carryFor = (a: LocalDate, b: LocalDate): Carry | undefined => {
+    const first = a > rolling.anchor ? a : rolling.anchor;
+    const last = b < today ? b : today;
+    if (first > last) return undefined;
+    let moved = 0;
+    for (const [d, r] of rolling.days) if (d >= first && d <= last) moved += r.moved;
+    return { carryIn: rolling.days.get(first)?.carryIn ?? 0, moved, left: rolling.days.get(last)?.left ?? 0 };
+  };
   const buckets = useMemo(() => bucketsFor(range, anchor, weekStartsOn), [range, anchor, weekStartsOn]);
   const segs = useMemo(() => buildSegments(data, from, to, now), [data, from, to, now]);
   const jf = jobFilter === 'all' ? undefined : jobFilter;
@@ -165,7 +188,8 @@ export function Earnings() {
       name: j.name,
       color: slotColor(j.color),
       value: tallies[i].byJob[j.id]?.value ?? 0,
-      projected: tallies[i].byJob[j.id]?.projected ?? 0,
+      // What's only scheduled hasn't happened yet, so it isn't drawn.
+      projected: 0,
     })),
   }));
   const legend = series.filter((j) => period.byJob[j.id]);
@@ -173,9 +197,12 @@ export function Earnings() {
   const selDate: LocalDate | null = range === 'day' ? anchor : (selBucket?.date ?? null);
   const selFrom = selDate ?? (selBucket ? toLocalDate(selBucket.start) : null);
   const selTo = selDate ?? (selBucket ? endOfMonth(toLocalDate(selBucket.start)) : null);
-  const selSpent = selFrom && selTo ? spentBetween(txs, selFrom, selTo, counts) : 0;
+  // Spending and set-asides count over the part you've tracked: from the day you started, through today.
+  const trackA = selFrom && selFrom < rolling.anchor ? rolling.anchor : selFrom;
+  const trackB = selTo && selTo > today ? today : selTo;
+  const selSpent = trackA && trackB && trackA <= trackB ? spentBetween(txs, trackA, trackB, counts) : 0;
   let selBills = 0;
-  if (selFrom && selTo) for (const [d, v] of plan.byDay) if (d >= selFrom && d <= selTo) selBills += v;
+  if (trackA && trackB) for (const [d, v] of plan.byDay) if (d >= trackA && d <= trackB) selBills += v;
 
   const heading = range === 'day' ? (anchor === today ? 'Earned today' : 'Earned') : isCurrent ? 'Earned so far' : 'Earned';
 
@@ -266,9 +293,9 @@ export function Earnings() {
               )}
             </div>
             {selDate ? (
-              <DayDetail date={selDate} segs={segs} jobs={activeJobs} now={now} spent={selSpent} bills={selBills} />
+              <DayDetail date={selDate} segs={segs} jobs={activeJobs} now={now} spent={selSpent} bills={selBills} carry={carryFor(selDate, selDate)} />
             ) : selBucket ? (
-              <PeriodDetail bucket={selBucket} segs={segs} jobs={activeJobs} now={now} spent={selSpent} bills={selBills} />
+              <PeriodDetail bucket={selBucket} segs={segs} jobs={activeJobs} now={now} spent={selSpent} bills={selBills} carry={carryFor(toLocalDate(selBucket.start), toLocalDate(selBucket.end - 1))} start={dayStart(rolling.anchor)} />
             ) : (
               <p className="py-4 text-[14px] text-ink-2">Tap a bar to see that {range === 'year' ? 'month' : 'day'}.</p>
             )}

@@ -2,7 +2,7 @@ import type { Bill, BillFrequency, BillPaycheck, Job, LocalDate, ScheduledJob, T
 import type { EngineData } from './accrual.ts';
 import { scheduledDaySegments } from './accrual.ts';
 import { addDays, daysInMonth, diffDays, eachDay, makeDate, ymd } from './dates.ts';
-import { paycheckSlot, paydaysBetween, type PaycheckSlot } from './pay.ts';
+import { lastPaydayOnOrBefore, paycheckSlot, paydaysBetween, type PaycheckSlot } from './pay.ts';
 
 const MONTH_STEP: Partial<Record<BillFrequency, number>> = { monthly: 1, quarterly: 3, yearly: 12 };
 
@@ -49,7 +49,18 @@ export function prevDueBefore(bill: DueBill, d: LocalDate): LocalDate | null {
 export function billPayJob(bill: Pick<Bill, 'payFrom' | 'jobId'>, jobs: readonly Job[]): ScheduledJob | undefined {
   if (!bill.payFrom) return undefined;
   const scheduled = jobs.filter((j): j is ScheduledJob => !j.deleted && j.kind === 'scheduled');
-  return scheduled.find((j) => j.id === bill.jobId) ?? scheduled[0];
+  return scheduled.find((j) => j.id === bill.jobId) ?? primaryJob(jobs);
+}
+
+/**
+ * The job whose paychecks pay bills that don't say which: your first scheduled
+ * job that's still going and pays something.
+ */
+export function primaryJob(jobs: readonly Job[]): ScheduledJob | undefined {
+  const scheduled = jobs
+    .filter((j): j is ScheduledJob => !j.deleted && j.kind === 'scheduled' && !j.archived)
+    .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  return scheduled.find((j) => j.takeHome > 0) ?? scheduled[0];
 }
 
 type PayPlan = Pick<Bill, 'payFrom' | 'jobId' | 'lateDays'>;
@@ -65,12 +76,17 @@ function slotPayDate(bill: PayPlan, slot: BillPaycheck, due: LocalDate, jobs: re
 }
 
 /**
- * The days a payment goes out: its due date, or the last paycheck of the
- * bill's kind on or before it (or within the days it's fine to be late). A
- * bill split between both paychecks goes out in two halves.
+ * The days a payment goes out, always on a payday: the last paycheck of the
+ * bill's kind on or before its due date (or within the days it's fine to be
+ * late), or for a bill not set to one, whichever paycheck comes last before
+ * it's due. A bill split between both paychecks goes out in two halves.
+ * Without a scheduled job, it's the due date.
  */
 export function payDatesFor(bill: PayPlan, due: LocalDate, jobs: readonly Job[]): LocalDate[] {
-  if (!bill.payFrom) return [due];
+  if (!bill.payFrom) {
+    const job = primaryJob(jobs);
+    return [(job && lastPaydayOnOrBefore(job, due)) || due];
+  }
   if (bill.payFrom !== 'both') return [slotPayDate(bill, bill.payFrom, due, jobs)];
   const a = slotPayDate(bill, 'end', due, jobs);
   const b = slotPayDate(bill, 'mid', due, jobs);
@@ -143,9 +159,13 @@ export function paymentsTouching(bill: Bill, from: LocalDate, to: LocalDate, job
   type Part = { due: LocalDate; share: number; before: number };
   // A paycheck that comes too late for one due date pays it together with the next.
   const groups: Array<{ pay: LocalDate; parts: Part[] }> = [];
-  for (const due of dueDatesBetween(bill, addDays(from, -SLACK_DAYS), addDays(to, SLACK_DAYS))) {
+  // Far enough around the range to find the payment before it, whatever the bill's schedule.
+  const slack = bill.frequency === 'yearly' ? 400 : bill.frequency === 'quarterly' ? 200 : SLACK_DAYS;
+  for (const due of dueDatesBetween(bill, addDays(from, -slack), addDays(to, slack))) {
     if (bill.endDate && due > bill.endDate) break;
-    const pays = payDatesFor(bill, due, jobs);
+    // A bill that starts after the paycheck before its due date can't be paid from that one: the
+    // first payment saves from the start date until it's due instead of being dropped.
+    const pays = payDatesFor(bill, due, jobs).map((p) => (!bill.payFrom && p < bill.startDate && due >= bill.startDate ? due : p));
     for (const pay of pays) {
       const part = { due, share: 1 / pays.length, before: 0 };
       const last = groups[groups.length - 1];
@@ -157,12 +177,13 @@ export function paymentsTouching(bill: Bill, from: LocalDate, to: LocalDate, job
   // What one bank payment settles: a paycheck's due dates, or one due date paid in halves.
   const split = bill.payFrom === 'both';
   const occOf = (gi: number, due: LocalDate) => (split ? `d${due}` : `g${gi}`);
-  type Occ = { planned: number; shares: number; last: LocalDate; paid: number; settled: boolean; actual: number };
+  type Occ = { planned: number; shares: number; dues: Set<LocalDate>; last: LocalDate; paid: number; settled: boolean; actual: number };
   const occs = new Map<string, Occ>();
   groups.forEach((g, gi) => {
     for (const p of g.parts) {
       const k = occOf(gi, p.due);
-      const o = occs.get(k) ?? { planned: 0, shares: 0, last: g.pay, paid: 0, settled: false, actual: 0 };
+      const o = occs.get(k) ?? { planned: 0, shares: 0, dues: new Set<LocalDate>(), last: g.pay, paid: 0, settled: false, actual: 0 };
+      o.dues.add(p.due);
       p.before = o.shares;
       o.shares += p.share;
       o.planned += bill.amount * p.share;
@@ -179,7 +200,8 @@ export function paymentsTouching(bill: Bill, from: LocalDate, to: LocalDate, job
     const mine = list.filter((x) => x.date > start && x.date <= end);
     o.paid = mine.reduce((t, x) => t + x.amount, 0);
     // One payment settles a bill that isn't split, unless you said it's only part.
-    const whole = !split && mine.some((x) => !x.part);
+    // A paycheck that pays two due dates (weekly bills, bunched paydays) needs a payment for each.
+    const whole = !split && mine.filter((x) => !x.part).length >= o.dues.size;
     o.settled = !!paid && o.paid > 0.005 && (whole || o.paid >= o.planned - 0.5 || paid.today > end);
     o.actual = o.settled ? o.paid : o.planned;
     prevEnd = end;
@@ -314,7 +336,7 @@ export interface Paycheck {
  */
 export function upcomingPaychecks(job: ScheduledJob, bills: readonly Bill[], jobs: readonly Job[], from: LocalDate, count: number, ignoreStart = false, paid?: PaidLog): Paycheck[] {
   const paydays = paydaysBetween(job, from, addDays(from, 31 * (count + 1))).slice(0, count + 1);
-  const primary = jobs.find((j): j is ScheduledJob => !j.deleted && j.kind === 'scheduled')?.id === job.id;
+  const primary = primaryJob(jobs)?.id === job.id;
   const out: Paycheck[] = [];
   for (let i = 0; i + 1 < paydays.length; i++) {
     const payday = paydays[i];

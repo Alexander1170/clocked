@@ -75,9 +75,14 @@ export function reapplyRule(
   let n = 0;
   for (const tx of txs) {
     if (tx.deleted || !rulesApply(tx)) continue;
-    const rule = ruleFor(rules, bankNameOf(tx), tx.rawName);
+    const own = ruleFor(rules, bankNameOf(tx), tx.rawName);
+    // A posted charge keeps the rule its pending one had, under the bank's new name, until that rule is forgotten.
+    const carried = !own && tx.ruleCarried ? rules.find((r) => r.id === tx.ruleId && !r.deleted) : undefined;
+    const rule = own ?? carried;
     if (rule?.id !== ruleId && tx.ruleId !== ruleId) continue;
     const next = withRule(tx, rule, bills);
+    if (carried) next.ruleCarried = true;
+    else delete next.ruleCarried;
     if (!ruleFieldsDiffer(tx, next)) continue;
     save(next);
     n += 1;

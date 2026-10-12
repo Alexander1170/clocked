@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Bill, DayOverride, ScheduledJob, Shift } from '../shared/types.ts';
-import { billForPayment, billShares, billStatus, dueDatesBetween, earningDays, paidLog, payDateFor, payDatesFor, planBills, saveWindow, upcomingPaychecks } from '../shared/bills.ts';
+import { billForPayment, billShares, billStatus, dueDatesBetween, earningDays, paidLog, payDateFor, payDatesFor, paymentsTouching, planBills, saveWindow, upcomingPaychecks } from '../shared/bills.ts';
 import { paycheckSlot } from '../shared/pay.ts';
 
 const nineToFive: Shift = { start: '08:00', end: '17:00', breakMinutes: 60, breakStart: '12:00' };
@@ -73,8 +73,9 @@ describe('spreading a bill over workdays', () => {
   it('moves shares off unpaid days off', () => {
     const off: DayOverride = { id: 'o', updatedAt: 1, jobId: 'dayJob', date: '2026-10-07', type: 'off_unpaid' };
     const plan = planBills([bill()], { ...data, overrides: [off] }, '2026-10-05', '2026-10-15');
+    // With a job, it's paid from the Oct 9 paycheck, so it saves Oct 5-9, less the day off.
     expect(plan.byDay.has('2026-10-07')).toBe(false);
-    expect(plan.byDay.get('2026-10-05')).toBeCloseTo(100 / 8, 6);
+    expect(plan.byDay.get('2026-10-05')).toBeCloseTo(100 / 4, 6);
   });
 
   it('stops after the end date', () => {
@@ -91,7 +92,7 @@ describe('spreading a bill over workdays', () => {
 
   it('adds up several bills per day', () => {
     const plan = planBills([bill(), bill({ id: 'b2', amount: 45, name: 'Netflix' })], data, '2026-10-05', '2026-10-05');
-    expect(plan.byDay.get('2026-10-05')).toBeCloseTo(145 / 9, 6);
+    expect(plan.byDay.get('2026-10-05')).toBeCloseTo(145 / 5, 6);
   });
 });
 
@@ -134,7 +135,9 @@ describe('bills paid from a paycheck', () => {
     expect(payDateFor(phone, '2026-11-09', jobs)).toBe('2026-11-13');
     expect(payDateFor(phone, '2026-12-09', jobs)).toBe('2026-12-11');
     expect(payDateFor(power, '2026-11-15', jobs)).toBe('2026-11-13');
-    expect(payDateFor(music, '2026-11-05', jobs)).toBe('2026-11-05');
+    // A bill not set to a paycheck goes out on the last payday before it's due.
+    expect(payDateFor(music, '2026-11-05', jobs)).toBe('2026-10-30');
+    expect(payDateFor(music, '2026-11-05', [])).toBe('2026-11-05');
   });
 
   it('has the money set aside by the payday, not the due date', () => {
@@ -165,6 +168,28 @@ describe('bills paid from a paycheck', () => {
       ['2026-11-13', 'mid', ['phone', 'power'], 210],
       ['2026-11-27', 'end', ['net', 'rent', 'music'], 1092],
     ]);
+  });
+
+  it('saves for the first payment from the start date when the paycheck before it came earlier', () => {
+    // Added Oct 20, due Oct 25: the last paycheck before it (Oct 16) came before the bill did.
+    const added = bill({ id: 'new', amount: 30, dueDate: '2026-10-25', startDate: '2026-10-20' });
+    const [first] = paymentsTouching(added, '2026-10-20', '2026-10-31', jobs);
+    expect(first).toMatchObject({ pay: '2026-10-25', from: '2026-10-20', amount: 30 });
+    // After that it goes back to the paycheck before it's due.
+    expect(payDateFor(added, '2026-11-25', jobs)).toBe('2026-11-13');
+  });
+
+  it('needs a payment for each due date a paycheck covers', () => {
+    const weekly = bill({ id: 'w', frequency: 'weekly', amount: 20, dueDate: '2026-11-06', startDate: '2026-10-01', payFrom: 'end' });
+    const one = paidLog([{ billId: 'w', date: '2026-10-30', amount: 20 }], '2026-10-31');
+    const check = upcomingPaychecks(fridays, [weekly], jobs, '2026-10-30', 1, false, one)[0];
+    expect(check.bills[0].dues.length).toBeGreaterThan(1);
+    expect(check.bills[0].done).toBe(false);
+  });
+
+  it('pays bills that don’t name a paycheck from the first job still going', () => {
+    const old = { ...fridays, id: 'old', payday: '2026-10-09', archived: true, createdAt: 1 };
+    expect(payDateFor(music, '2026-11-05', [old, { ...fridays, createdAt: 2 }])).toBe('2026-10-30');
   });
 
   it('splits a bill between both paychecks', () => {

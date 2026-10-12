@@ -123,10 +123,11 @@ describe('everything together', () => {
       '2026-10-05',
       '2026-10-05',
     );
-    expect(plan.byKind.bills.get('2026-10-05')).toBeCloseTo(100 / 9, 6);
+    // Paid from the Oct 9 paycheck before it's due, so it saves over Oct 5-9.
+    expect(plan.byKind.bills.get('2026-10-05')).toBeCloseTo(100 / 5, 6);
     expect(plan.byKind.savings.get('2026-10-05')).toBeCloseTo(10, 6);
     expect(plan.byKind.goals.get('2026-10-05')).toBeCloseTo(9.5, 6);
-    expect(plan.byDay.get('2026-10-05')).toBeCloseTo(100 / 9 + 19.5, 6);
+    expect(plan.byDay.get('2026-10-05')).toBeCloseTo(100 / 5 + 19.5, 6);
   });
 });
 

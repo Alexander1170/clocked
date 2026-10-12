@@ -42,7 +42,7 @@ export function PaycheckCard({ check, amount, today, title }: { check: Paycheck;
       ) : (
         <ul className="mt-2.5 space-y-0.5">
           {check.bills.map((b) => {
-            const fromCheck = b.pay === check.payday && !!b.bill.payFrom;
+            const fromCheck = b.pay === check.payday;
             const paid = !!b.done;
             const some = !paid && (b.paid ?? 0) > 0.005;
             return (
