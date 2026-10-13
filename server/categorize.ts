@@ -37,18 +37,26 @@ function sameName(a: string, b: string): boolean {
  * amount has cents, since a round amount like $40 is too likely to be a
  * different purchase. The closest day wins.
  */
-export function findManualMatch(t: { amount: number; date: LocalDate; merchant: string; alias?: string }, candidates: readonly Transaction[]): Transaction | undefined {
+export function findManualMatch(
+  t: { amount: number; date: LocalDate; merchant: string; alias?: string },
+  candidates: readonly Transaction[],
+  /** Whether this bank transaction pays the bill a candidate you marked paid is for. */
+  paysMarked?: (c: Transaction) => boolean,
+): Transaction | undefined {
   const cents = Math.round(t.amount * 100);
   let best: Transaction | undefined;
   let bestScore = Infinity;
   for (const c of candidates) {
-    if (c.deleted || c.source === 'plaid' || Math.round(c.amount * 100) !== cents) continue;
+    if (c.deleted || c.source === 'plaid') continue;
+    // A bill you marked paid matches the bank's payment of it even a few cents off.
+    const bill = !!c.billId && !!paysMarked?.(c);
+    if (Math.round(c.amount * 100) !== cents && !(bill && Math.abs(c.amount - t.amount) <= 1)) continue;
     const gap = Math.abs(diffDays(c.date, t.date));
     if (gap > 3) continue;
     // The name you taught Clocked for this place counts as a match too.
-    const named = sameName(c.merchant, t.merchant) || (!!t.alias && sameName(c.merchant, t.alias));
+    const named = bill || sameName(c.merchant, t.merchant) || (!!t.alias && sameName(c.merchant, t.alias));
     if (!named && !(gap <= 1 && cents % 100 !== 0)) continue;
-    const score = gap * 10 + (named ? 0 : 5);
+    const score = gap * 10 + (named ? 0 : 5) + (Math.round(c.amount * 100) === cents ? 0 : 3);
     if (score < bestScore) {
       best = c;
       bestScore = score;
@@ -119,6 +127,8 @@ export function mapPlaidTransaction(t: PlaidTransaction, ctx: MapContext): Trans
     rec.flow = prev.flow;
     rec.billId = prev.billId;
     rec.billPart = prev.billPart;
+    rec.restNext = prev.restNext;
+    rec.billDue = prev.billDue;
     rec.goalId = prev.goalId;
     rec.hidden = prev.hidden;
     rec.jobId = prev.jobId;

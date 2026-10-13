@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Bill, GigSession, Saving, ScheduledJob } from '../shared/types.ts';
+import type { Bill, GigSession, Saving, ScheduledJob, Transaction } from '../shared/types.ts';
 import { dayStart } from '../shared/dates.ts';
 import {
   cumulative,
@@ -10,6 +10,8 @@ import {
   monthlySavings,
   monthlyTakeHome,
   monthSplit,
+  notInBankYet,
+  balanceBefore,
   saveIdea,
   setAsideBetween,
   splitLeftover,
@@ -94,6 +96,25 @@ describe('until payday', () => {
     });
     // A bill bigger than what's there shows up as short before it bounces.
     expect(untilPaydayFromBalance({ balance: 5, unpaid: 100, saving: 0, today: '2026-10-07', nextPayday: '2026-10-13' }).free).toBe(-95);
+  });
+
+  it('counts the paycheck and bills you marked paid until the bank shows them', () => {
+    const tx = (id: string, over: Partial<Transaction>): Transaction => ({ id, updatedAt: 1, source: 'plaid', date: '2026-10-13', amount: 10, merchant: 'Shop', categoryId: 'cat_other', ...over });
+    const o = { check: 2000, lastPayday: '2026-10-13', today: '2026-10-13', billName: (id: string) => (id === 'b' ? 'Power' : undefined) };
+    const marked = [tx('m1', { source: 'manual', amount: 150, merchant: '', billId: 'b' }), tx('m2', { source: 'manual', amount: 60, merchant: 'Phone', billId: 'p', date: '2026-10-01' })];
+    // Payday, and the deposit isn’t in yet: the check counts. Last week’s marked bill is long since in the balance.
+    expect(notInBankYet([...marked, tx('s', { amount: 25 })], o)).toEqual({ paycheck: 2000, marked: [{ name: 'Power', amount: 150, date: '2026-10-13' }], depositedOn: null });
+    // Once it lands (a day early here, as a transfer), it’s in the balance.
+    expect(notInBankYet([tx('d', { amount: -1990, flow: 'transfer', date: '2026-10-12' })], o)).toMatchObject({ paycheck: 0, depositedOn: '2026-10-12' });
+    // A gig payout or a deposit to an account you switched off isn’t the paycheck.
+    expect(notInBankYet([tx('g', { amount: -1990, flow: 'income', gigPayout: true }), tx('x', { amount: -1990, flow: 'income', accountOff: true })], o).paycheck).toBe(2000);
+  });
+
+  it('works out what was in the bank going into payday', () => {
+    const tx = (id: string, over: Partial<Transaction>): Transaction => ({ id, updatedAt: 1, source: 'plaid', date: '2026-10-13', amount: 10, merchant: 'Shop', categoryId: 'cat_other', ...over });
+    // $1,400 now, after the $2,000 check and $640 out since.
+    const txs = [tx('d', { amount: -2000 }), tx('a', { amount: 600 }), tx('b', { amount: 40, hidden: true }), tx('old', { amount: 70, date: '2026-10-12' }), tx('off', { amount: 9, accountOff: true })];
+    expect(balanceBefore(txs, 1400, '2026-10-13')).toBe(40);
   });
 
   it('makes up a paycheck that ran short from the next one', () => {

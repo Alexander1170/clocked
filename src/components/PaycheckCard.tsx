@@ -1,6 +1,6 @@
 import { Circle, CircleCheck, CircleDashed } from 'lucide-react';
 import type { LocalDate } from '../../shared/types.ts';
-import type { Paycheck, PaycheckBill } from '../../shared/bills.ts';
+import { lineTotal, type Paycheck, type PaycheckBill } from '../../shared/bills.ts';
 import type { PaycheckSlot } from '../../shared/pay.ts';
 import { diffDays } from '../../shared/dates.ts';
 import { dayLabel, money, monthShort } from '../lib/format.ts';
@@ -48,7 +48,7 @@ export function PaycheckCard({ check, amount, today, title }: { check: Paycheck;
             return (
               <li key={`${b.bill.id}|${b.pay}`}>
                 <button
-                  onClick={() => openSheet({ kind: 'bill', id: b.bill.id })}
+                  onClick={() => openSheet({ kind: 'payBill', billId: b.bill.id, due: b.dues[b.dues.length - 1], amount: b.amount, paid: b.paid })}
                   className="-mx-2 flex w-[calc(100%+1rem)] items-center gap-2.5 rounded-xl px-2 py-1.5 text-left text-[14px] transition-colors hover:bg-hover"
                 >
                   {paid ? (
@@ -62,11 +62,11 @@ export function PaycheckCard({ check, amount, today, title }: { check: Paycheck;
                     <span className={paid ? 'text-ink-2' : 'font-medium'}>{b.bill.name}</span>
                     <span className="text-[13px] text-ink-3">
                       {' '}
-                      · {payNote(b, fromCheck)}
-                      {some && ` · ${money(b.paid ?? 0)} paid`}
+                      · {b.carried ? `rest of the ${shortDay(b.dues[b.dues.length - 1])} bill` : payNote(b, fromCheck)}
+                      {some && (b.restNext ? ` · ${money(b.paid ?? 0)} paid, rest next paycheck` : ` · ${money(b.paid ?? 0)} paid`)}
                     </span>
                   </span>
-                  <span className="num shrink-0 font-semibold">{money(b.amount)}</span>
+                  <span className="num shrink-0 font-semibold">{money(lineTotal(b))}</span>
                 </button>
               </li>
             );

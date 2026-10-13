@@ -16,7 +16,8 @@ export type SheetSpec =
   | { kind: 'saving'; id?: string; amount?: number }
   | { kind: 'goal'; id?: string; type?: 'item' | 'project' }
   | { kind: 'category'; id?: string }
-  | { kind: 'place'; key: string };
+  | { kind: 'place'; key: string }
+  | { kind: 'payBill'; billId: string; due: LocalDate; amount: number; paid?: number };
 
 export const useSheets = create<{
   stack: SheetSpec[];

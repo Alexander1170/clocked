@@ -8,7 +8,7 @@ import { paidLog, upcomingPaychecks, type PaidLog } from '../../shared/bills.ts'
 import { lastPaydayOnOrBefore, nextPaydayOnOrAfter, paydaysBetween } from '../../shared/pay.ts';
 import { checkAmount, spentBetween } from './money.ts';
 import { useBank, type AccountInfo } from './bank.ts';
-import { gigPayBetween, setAsideBetween, stretchEndings, untilPayday, untilPaydayFromBalance, type UntilPayday } from './insights.ts';
+import { balanceBefore, gigPayBetween, notInBankYet, setAsideBetween, stretchEndings, untilPayday, type UntilPayday, untilPaydayFromBalance } from './insights.ts';
 import { live, useData } from './store.ts';
 import { FALLBACK_CATEGORY } from './categories.ts';
 
@@ -141,8 +141,9 @@ export function useCoverage(): Coverage {
 /** Bank payments linked to bills, so paid bills go by what you actually paid. */
 export function usePaidLog(): PaidLog {
   const txs = useTransactions();
+  const { trackFrom } = useSettings();
   const today = toLocalDate(Date.now());
-  return useMemo(() => paidLog(txs, today), [txs, today]);
+  return useMemo(() => paidLog(txs, today, trackFrom), [txs, today, trackFrom]);
 }
 
 /** Decides what counts as spending (see makeSpendCheck). */
@@ -185,7 +186,15 @@ export interface PaydayStretch extends UntilPayday {
    * in the counted accounts, less the bills still to come out before payday.
    * Otherwise it's worked out from the paycheck.
    */
-  fromBank: { balance: number; asOf: number; unpaid: Array<{ name: string; amount: number; part: boolean }> } | null;
+  fromBank: {
+    balance: number;
+    asOf: number;
+    unpaid: Array<{ name: string; amount: number; part: boolean }>;
+    /** This paycheck, when the bank hasn't shown the deposit yet. */
+    paycheck: number;
+    /** Bills you marked paid that the bank hasn't shown yet. */
+    marked: Array<{ name: string; amount: number }>;
+  } | null;
 }
 
 /** A bank balance older than this is too stale to start from. */
@@ -258,20 +267,27 @@ export function useUntilPayday(now: number): PaydayStretch | null {
     const counted = fresh.flatMap((i) => i.accounts.filter(countable));
     if (counted.length) {
       const balance = counted.reduce((t, a) => t + (a.available ?? a.balance ?? 0), 0);
+      // The paycheck before the bank shows it, and bills you marked paid before the bank sends them.
+      const { paycheck, marked, depositedOn } = notInBankYet(txs, { check: cur.check, lastPayday, today, billName: (id) => bills.find((b) => b.id === id)?.name });
       const check = upcomingPaychecks(job, bills, data.jobs, lastPayday, 1, false, paid)[0];
-      // What's still to come out of the bills this paycheck pays, part payments taken off.
+      // What's still to come out of the bills this paycheck pays, part payments taken off. The rest of a
+      // bill you split onto the next paycheck comes out of that one instead.
       const unpaid = (check?.bills ?? [])
-        .filter((b) => !b.done)
+        .filter((b) => !b.done && !b.restNext)
         .map((b) => ({ name: b.bill.name, amount: Math.max(0, b.amount - (b.paid ?? 0)), part: (b.paid ?? 0) > 0.005 }))
         .filter((b) => b.amount > 0.005);
+      const start = balance + paycheck - marked.reduce((t, m) => t + m.amount, 0);
+      const into = depositedOn && depositedOn < lastPayday ? depositedOn : lastPayday;
+      const leftover = balanceBefore(txs, balance, into) - marked.filter((m) => m.date < into).reduce((t, m) => t + m.amount, 0);
       // Savings stay in checking until you move them, so this stretch's still count.
-      const u = untilPaydayFromBalance({ balance, unpaid: unpaid.reduce((t, b) => t + b.amount, 0), saving: cur.saving, today, nextPayday });
+      const u = untilPaydayFromBalance({ balance: start, unpaid: unpaid.reduce((t, b) => t + b.amount, 0), saving: cur.saving, today, nextPayday });
       return {
         ...base,
-        // Money left over last time can only be moved if it's still there.
-        lastEnd: base.lastEnd == null ? null : Math.min(base.lastEnd, Math.max(0, u.free)),
+        // Money left over last time can only be moved if it's still there: what the bank held going into
+        // payday, less bills you marked paid before it that haven't come out. Not this paycheck's money.
+        lastEnd: base.lastEnd == null ? null : Math.min(base.lastEnd, Math.max(0, u.free), Math.max(0, leftover)),
         ...u,
-        fromBank: { balance, asOf: Math.max(...fresh.map((i) => i.syncedAt ?? 0)), unpaid },
+        fromBank: { balance, asOf: Math.max(...fresh.map((i) => i.syncedAt ?? 0)), unpaid, paycheck, marked },
       };
     }
     return { ...base, ...untilPayday({ ...cur, today, nextPayday, carry }), fromBank: null };

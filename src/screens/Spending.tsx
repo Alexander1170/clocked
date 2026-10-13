@@ -138,12 +138,12 @@ export function Spending() {
   const today = toLocalDate(now);
   const { weekStartsOn, trackFrom } = useSettings();
   const txs = useTransactions();
-  const doubled = useMemo(() => findDuplicates(txs, trackFrom).length, [txs, trackFrom]);
+  const billMap = useBillMap();
+  const doubled = useMemo(() => findDuplicates(txs, trackFrom, billMap).length, [txs, trackFrom, billMap]);
   const cats = useCategories();
   const catOf = useCategoryOf();
   const data = useEngineData();
   const counts = useSpendCheck();
-  const billMap = useBillMap();
   const [range, setRange] = useState<Range>('week');
   const [mode, setMode] = useState<ChartMode>('left');
   const [anchor, setAnchor] = useState<LocalDate>(today);

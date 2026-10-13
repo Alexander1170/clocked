@@ -116,6 +116,19 @@ describe('the same purchase twice', () => {
     expect(findDuplicates([{ ...txs[0], distinct: ['b2'] }, txs[1], txs[2]]).map((d) => d.bank.id)).toEqual(['b1']);
   });
 
+  it('pairs a bill you marked paid with the bank’s payment of it, a few cents off', () => {
+    const marked = hand('m', { amount: 40, merchant: 'Gym', billId: 'gym', categoryId: 'cat_health' });
+    const txs = [marked, bank('b', { amount: 40.37, merchant: 'Gym', date: '2026-10-06' }), bank('c', { amount: 40.5, merchant: 'Corner Store', date: '2026-10-06' })];
+    expect(findDuplicates(txs, undefined, { gym }).map((d) => d.bank.id)).toEqual(['b']);
+    // Without knowing the bill, it takes the same amount.
+    expect(findDuplicates(txs)).toEqual([]);
+  });
+
+  it('keeps which bill, which due date, and the part you paid', () => {
+    const marked = hand('m', { amount: 20, billId: 'gym', billPart: true, restNext: true, billDue: '2026-10-20' });
+    expect(mergeDuplicate(bank('b', { amount: 20 }), marked)).toMatchObject({ billId: 'gym', billPart: true, restNext: true, billDue: '2026-10-20' });
+  });
+
   it('merges into the bank copy, with your name, category, and note', () => {
     expect(mergeDuplicate(bank('b', { amount: 50 }), hand('m', { note: 'concert' }))).toMatchObject({
       id: 'b',

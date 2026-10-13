@@ -108,7 +108,8 @@ export function Review() {
   const today = toLocalDate(Date.now());
 
   const places = useMemo(() => groupPlaces(txs, rules, settings.trackFrom), [txs, rules, settings.trackFrom]);
-  const dups = useMemo(() => findDuplicates(txs, settings.trackFrom), [txs, settings.trackFrom]);
+  const billMap = useBillMap();
+  const dups = useMemo(() => findDuplicates(txs, settings.trackFrom, billMap), [txs, settings.trackFrom, billMap]);
   const allHidden = (p: Place) => p.hidden || p.txs.every((t) => t.hidden);
   const hiddenPlaces = places.filter(allHidden);
   // Ones you hid one at a time, from places that still show.

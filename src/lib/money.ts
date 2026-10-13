@@ -1,6 +1,8 @@
 import type { Bill, Goal, LocalDate, ScheduledJob, Transaction } from '../../shared/types.ts';
 import { buildSegments, earnedBetween, valueIn, type EngineData } from '../../shared/accrual.ts';
 import { addDays, dayEnd, dayStart, diffDays, toLocalDate } from '../../shared/dates.ts';
+import { namesBill } from '../../shared/bills.ts';
+import { bankNameOf } from '../../shared/rules.ts';
 import type { SetAsideKind, SetAsidePlan } from '../../shared/plan.ts';
 import { hourlyRate, nextPaydayOnOrAfter, periodForPayday, unpaidFrom, weeklyPaidHours } from '../../shared/pay.ts';
 import { money } from './format.ts';
@@ -256,14 +258,17 @@ export interface Duplicate {
  * amount within three days, whatever the name. Each pairs up once, closest day
  * first. Pairs you said aren't the same are left out.
  */
-export function findDuplicates(txs: readonly Transaction[], trackFrom?: LocalDate): Duplicate[] {
+export function findDuplicates(txs: readonly Transaction[], trackFrom?: LocalDate, bills: Record<string, Bill> = {}): Duplicate[] {
   const manual = txs.filter((t) => t.source !== 'plaid' && !t.deleted && !t.hidden);
   const bank = txs.filter((t) => t.source === 'plaid' && isShown(t, trackFrom) && t.flow !== 'income');
   const pairs: Array<Duplicate & { gap: number }> = [];
   for (const m of manual) {
     const cents = Math.round(m.amount * 100);
+    const bill = m.billId ? bills[m.billId] : undefined;
     for (const b of bank) {
-      if (Math.round(b.amount * 100) !== cents) continue;
+      // A bill you marked paid matches the bank's payment of it even a few cents off.
+      const near = !!bill && !bill.deleted && Math.abs(b.amount - m.amount) <= 1 && namesBill(bill, bankNameOf(b), b.rawName);
+      if (Math.round(b.amount * 100) !== cents && !near) continue;
       const gap = Math.abs(diffDays(m.date, b.date));
       if (gap > 3 || m.distinct?.includes(b.id) || b.distinct?.includes(m.id)) continue;
       pairs.push({ manual: m, bank: b, gap });
@@ -295,6 +300,12 @@ export function mergeDuplicate(bank: Transaction, manual: Transaction): Transact
     goalId: manual.goalId ?? bank.goalId,
     edited: true,
   };
+  // Part of a bill, the rest from the next paycheck, and which due date: what you said when you marked it paid.
+  if (manual.billId) {
+    out.billPart = manual.billPart;
+    out.restNext = manual.restNext;
+    out.billDue = manual.billDue;
+  }
   const name = manual.merchant.trim();
   if (name && name !== bank.merchant) {
     out.bankName = bank.bankName ?? bank.merchant;

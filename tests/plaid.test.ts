@@ -382,6 +382,22 @@ describe('bank sync against a fake Plaid', () => {
     expect(get('t20')!.jobId).toBeUndefined();
   });
 
+  it('matches a bill you marked paid with the bank’s payment of it, a few cents off', async () => {
+    store.apply([
+      change('bills', { id: 'bill_cell', updatedAt: 1, name: 'Cell', match: 'Northwind Wireless', amount: 120, frequency: 'monthly', dueDate: '2026-10-20', categoryId: 'cat_phone', startDate: '2026-10-01' }),
+      change('transactions', { id: 'hand4', updatedAt: 1, source: 'manual', date: '2026-10-13', amount: 60, merchant: 'Cell', categoryId: 'cat_phone', billId: 'bill_cell', billDue: '2026-10-20', billPart: true, restNext: true }),
+    ]);
+    fake.pages[14] = {
+      added: [tx('t24', { amount: 60.37, merchant_name: 'Northwind Wireless', name: 'NORTHWIND WIRELESS PCS SVC', authorized_date: '2026-10-14', personal_finance_category: { primary: 'RENT_AND_UTILITIES', detailed: 'RENT_AND_UTILITIES_TELEPHONE' } })],
+      modified: [],
+      removed: [],
+    };
+    await bank.syncItem('item_1');
+    // The bank's amount, with what you said about it.
+    expect(get('t24')).toMatchObject({ amount: 60.37, merchant: 'Cell', billId: 'bill_cell', billDue: '2026-10-20', billPart: true, restNext: true, edited: true });
+    expect(store.get('transactions', 'hand4')?.deleted).toBe(true);
+  });
+
   it('turns an account on and off', () => {
     bank.setAccountIncluded('item_1', 'acc_loan', true);
     expect(get('t4')!.accountOff).toBeUndefined();

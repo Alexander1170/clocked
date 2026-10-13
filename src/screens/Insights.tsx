@@ -263,7 +263,7 @@ export function Insights() {
               )}
             </p>
             {stretch.fromBank ? (
-              <Meter value={stretch.fromBank.balance - stretch.free} of={Math.max(1, stretch.fromBank.balance)} over={stretch.free < 0} />
+              <Meter value={stretch.start - stretch.free} of={Math.max(1, stretch.start)} over={stretch.free < 0} />
             ) : (
               <Meter value={Math.max(0, stretch.spent - stretch.gig - stretch.carry)} of={Math.max(1, stretch.start)} over={stretch.free < 0} />
             )}
@@ -277,6 +277,12 @@ export function Insights() {
               {stretch.fromBank ? (
                 <>
                   <Line label={`In checking, as of ${asOf(stretch.fromBank.asOf, today)}`} value={money(stretch.fromBank.balance)} />
+                  {stretch.fromBank.paycheck > 0.005 && (
+                    <Line label={`Paycheck ${dayLabel(stretch.lastPayday)}, not in the bank yet`} value={signed(stretch.fromBank.paycheck)} />
+                  )}
+                  {stretch.fromBank.marked.map((b, i) => (
+                    <Line key={`m${i}`} label={`${b.name}, paid, not through the bank yet`} value={minus(b.amount)} />
+                  ))}
                   {stretch.fromBank.unpaid.map((b, i) => (
                     <Line key={i} label={`${b.name}, not paid yet`} value={minus(b.amount)} />
                   ))}

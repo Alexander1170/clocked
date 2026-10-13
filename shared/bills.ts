@@ -111,6 +111,8 @@ export interface BillPayment {
   paid?: number;
   /** Paid: the bank shows it all, or the payment came in for a different amount. */
   done?: boolean;
+  /** Part paid, and you said the rest comes from the next paycheck. */
+  restNext?: boolean;
 }
 
 /** One bank payment linked to a bill. */
@@ -119,6 +121,10 @@ export interface BillPaid {
   amount: number;
   /** Pays only part of it. */
   part?: boolean;
+  /** With part: the rest comes from the next paycheck. */
+  restNext?: boolean;
+  /** The due date it pays, when you said: it counts toward that one whenever it was paid. */
+  due?: LocalDate;
 }
 
 /** Bank payments linked to bills, so bills go by what you actually paid. */
@@ -128,12 +134,21 @@ export interface PaidLog {
 }
 
 /** The payments linked to each bill. */
-export function paidLog(txs: ReadonlyArray<Pick<Transaction, 'billId' | 'billPart' | 'date' | 'amount' | 'deleted'>>, today: LocalDate): PaidLog {
+export function paidLog(
+  txs: ReadonlyArray<Pick<Transaction, 'billId' | 'billPart' | 'restNext' | 'billDue' | 'date' | 'amount' | 'deleted'>>,
+  today: LocalDate,
+  trackFrom?: LocalDate,
+): PaidLog {
   const byBill = new Map<string, BillPaid[]>();
   for (const t of txs) {
-    if (!t.billId || t.deleted || !(t.amount > 0)) continue;
+    // Before you started tracking, there's no telling which payment a bank charge was for.
+    if (!t.billId || t.deleted || !(t.amount > 0) || (trackFrom && t.date < trackFrom)) continue;
     const list = byBill.get(t.billId) ?? [];
-    list.push(t.billPart ? { date: t.date, amount: t.amount, part: true } : { date: t.date, amount: t.amount });
+    const p: BillPaid = { date: t.date, amount: t.amount };
+    if (t.billPart) p.part = true;
+    if (t.billPart && t.restNext) p.restNext = true;
+    if (t.billDue) p.due = t.billDue;
+    list.push(p);
     byBill.set(t.billId, list);
   }
   return { today, byBill };
@@ -177,12 +192,12 @@ export function paymentsTouching(bill: Bill, from: LocalDate, to: LocalDate, job
   // What one bank payment settles: a paycheck's due dates, or one due date paid in halves.
   const split = bill.payFrom === 'both';
   const occOf = (gi: number, due: LocalDate) => (split ? `d${due}` : `g${gi}`);
-  type Occ = { planned: number; shares: number; dues: Set<LocalDate>; last: LocalDate; paid: number; settled: boolean; actual: number };
+  type Occ = { planned: number; shares: number; dues: Set<LocalDate>; last: LocalDate; paid: number; settled: boolean; actual: number; restNext: boolean };
   const occs = new Map<string, Occ>();
   groups.forEach((g, gi) => {
     for (const p of g.parts) {
       const k = occOf(gi, p.due);
-      const o = occs.get(k) ?? { planned: 0, shares: 0, dues: new Set<LocalDate>(), last: g.pay, paid: 0, settled: false, actual: 0 };
+      const o = occs.get(k) ?? { planned: 0, shares: 0, dues: new Set<LocalDate>(), last: g.pay, paid: 0, settled: false, actual: 0, restNext: false };
       o.dues.add(p.due);
       p.before = o.shares;
       o.shares += p.share;
@@ -193,17 +208,37 @@ export function paymentsTouching(bill: Bill, from: LocalDate, to: LocalDate, job
     }
   });
   const list = paid?.byBill.get(bill.id) ?? [];
+  // A payment that says which due date it's for counts toward that one; the rest go by when they landed.
+  const named = new Set([...occs.values()].flatMap((o) => [...o.dues]));
+  // Ones you paid part of, with the rest to come from a later paycheck, still waiting for it.
+  const open: Occ[] = [];
   let prevEnd: LocalDate | null = null;
   for (const o of occs.values()) {
     const end = addDays(o.last, PAID_GRACE_DAYS);
     const start: LocalDate = prevEnd ?? addDays(end, -31);
-    const mine = list.filter((x) => x.date > start && x.date <= end);
+    const mine = list.filter((x) => (x.due && named.has(x.due) ? o.dues.has(x.due) : x.date > start && x.date <= end));
+    // The rest of one paid in part comes first. Whatever's left of the payment goes toward this one.
+    for (const x of mine.filter((m) => !m.due || !named.has(m.due)).sort((a, b) => a.date.localeCompare(b.date))) {
+      const before = open[0];
+      if (!before) break;
+      const take = Math.min(x.amount, Math.max(0, before.planned - before.paid));
+      before.paid += take;
+      mine.splice(mine.indexOf(x), 1);
+      if (x.amount - take > 0.005) mine.push({ ...x, amount: x.amount - take, part: true });
+      // A full payment settles it even if it's a little short: the bank's amount wins.
+      before.settled = !x.part || before.paid >= before.planned - 0.5;
+      before.actual = before.settled ? before.paid : before.planned;
+      if (before.settled) open.shift();
+    }
     o.paid = mine.reduce((t, x) => t + x.amount, 0);
+    o.restNext = mine.some((x) => x.part && x.restNext);
     // One payment settles a bill that isn't split, unless you said it's only part.
     // A paycheck that pays two due dates (weekly bills, bunched paydays) needs a payment for each.
+    // While the rest is coming from the next paycheck, it stays open however long that takes.
     const whole = !split && mine.filter((x) => !x.part).length >= o.dues.size;
-    o.settled = !!paid && o.paid > 0.005 && (whole || o.paid >= o.planned - 0.5 || paid.today > end);
+    o.settled = !!paid && o.paid > 0.005 && (whole || o.paid >= o.planned - 0.5 || (paid.today > end && !o.restNext));
     o.actual = o.settled ? o.paid : o.planned;
+    if (o.restNext && !o.settled) open.push(o);
     prevEnd = end;
   }
 
@@ -218,8 +253,10 @@ export function paymentsTouching(bill: Bill, from: LocalDate, to: LocalDate, job
     let toward = 0;
     let share = 0;
     let done = true;
+    let restNext = false;
     for (const p of g.parts) {
       const o = occs.get(occOf(i, p.due))!;
+      if (o.restNext && !o.settled) restNext = true;
       const want = (o.actual * p.share) / o.shares;
       const got = Math.min(want, Math.max(0, o.paid - (o.actual * p.before) / o.shares));
       amount += want;
@@ -228,7 +265,7 @@ export function paymentsTouching(bill: Bill, from: LocalDate, to: LocalDate, job
       if (!o.settled && got < want - 0.5) done = false;
     }
     const dues = [...new Set(g.parts.map((p) => p.due))];
-    out.push({ pay: g.pay, dues, amount, from: saveFrom, share: split ? share : 1, ...(paid ? { paid: toward, done } : {}) });
+    out.push({ pay: g.pay, dues, amount, from: saveFrom, share: split ? share : 1, ...(paid ? { paid: toward, done } : {}), ...(restNext && !done ? { restNext } : {}) });
   }
   return out;
 }
@@ -317,7 +354,14 @@ export interface PaycheckBill {
   paid?: number;
   /** Paid, by the bank's account. */
   done?: boolean;
+  /** Part paid; the rest comes from the next paycheck. */
+  restNext?: boolean;
+  /** The rest of a bill the paycheck before paid part of. */
+  carried?: boolean;
 }
+
+/** What a paycheck's bill line still takes out of it: all of it, or just the part paid when the rest is for the next one. */
+export const lineTotal = (b: Pick<PaycheckBill, 'amount' | 'paid' | 'restNext' | 'done'>) => (b.restNext && !b.done ? (b.paid ?? 0) : b.amount);
 
 export interface Paycheck {
   payday: LocalDate;
@@ -335,7 +379,9 @@ export interface Paycheck {
  * from before a bill's start date count too: they were still paid.
  */
 export function upcomingPaychecks(job: ScheduledJob, bills: readonly Bill[], jobs: readonly Job[], from: LocalDate, count: number, ignoreStart = false, paid?: PaidLog): Paycheck[] {
-  const paydays = paydaysBetween(job, from, addDays(from, 31 * (count + 1))).slice(0, count + 1);
+  // The paycheck before too, for the rest of anything it split onto the first one.
+  const before = lastPaydayOnOrBefore(job, addDays(from, -1));
+  const paydays = [...(before ? [before] : []), ...paydaysBetween(job, from, addDays(from, 31 * (count + 1))).slice(0, count + 1)];
   const primary = primaryJob(jobs)?.id === job.id;
   const out: Paycheck[] = [];
   for (let i = 0; i + 1 < paydays.length; i++) {
@@ -348,13 +394,17 @@ export function upcomingPaychecks(job: ScheduledJob, bills: readonly Bill[], job
       if (payJob ? payJob.id !== job.id : !primary) continue;
       for (const p of paymentsTouching(bill, payday, addDays(until, -1), jobs, ignoreStart, paid)) {
         if (payJob ? p.pay === payday : p.pay >= payday && p.pay < until)
-          list.push({ bill, pay: p.pay, dues: p.dues, amount: p.amount, share: p.share, paid: p.paid, done: p.done });
+          list.push({ bill, pay: p.pay, dues: p.dues, amount: p.amount, share: p.share, paid: p.paid, done: p.done, restNext: p.restNext });
       }
     }
+    // The rest of what the paycheck before split onto this one.
+    for (const b of out[i - 1]?.bills ?? []) {
+      if (b.restNext && !b.done) list.push({ bill: b.bill, pay: payday, dues: b.dues, amount: b.amount - (b.paid ?? 0), share: b.share, carried: true });
+    }
     list.sort((a, b) => a.pay.localeCompare(b.pay) || a.dues[0].localeCompare(b.dues[0]) || a.bill.name.localeCompare(b.bill.name));
-    out.push({ payday, slot: paycheckSlot(job, payday), until, bills: list, billTotal: list.reduce((t, b) => t + b.amount, 0) });
+    out.push({ payday, slot: paycheckSlot(job, payday), until, bills: list, billTotal: list.reduce((t, b) => t + lineTotal(b), 0) });
   }
-  return out;
+  return before ? out.slice(1) : out;
 }
 
 /** Days with scheduled work or paid time off at any scheduled job. */
@@ -419,6 +469,11 @@ const unglue = (s: string) => s.replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').replac
 export function paysBill(bill: Pick<Bill, 'name' | 'match' | 'amount' | 'deleted'>, merchant: string, amount: number, rawName = ''): boolean {
   if (bill.deleted || !(amount > 0) || !(bill.amount > 0)) return false;
   if (amount < bill.amount * 0.5 || amount > bill.amount * 1.5) return false;
+  return namesBill(bill, merchant, rawName);
+}
+
+/** Whether the bank's description names a bill: its bank name, or its own name, as whole words. */
+export function namesBill(bill: Pick<Bill, 'name' | 'match'>, merchant: string, rawName = ''): boolean {
   const key = words(bill.match?.trim() || bill.name).trim();
   return !!key && [merchant, rawName, unglue(merchant), unglue(rawName)].map(words).join('').includes(` ${key} `);
 }

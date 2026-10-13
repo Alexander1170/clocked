@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Bill, DayOverride, ScheduledJob, Shift } from '../shared/types.ts';
-import { billForPayment, billShares, billStatus, dueDatesBetween, earningDays, paidLog, payDateFor, payDatesFor, paymentsTouching, planBills, saveWindow, upcomingPaychecks } from '../shared/bills.ts';
+import { billForPayment, billShares, billStatus, dueDatesBetween, earningDays, lineTotal, paidLog, payDateFor, payDatesFor, paymentsTouching, planBills, saveWindow, upcomingPaychecks } from '../shared/bills.ts';
 import { paycheckSlot } from '../shared/pay.ts';
 
 const nineToFive: Shift = { start: '08:00', end: '17:00', breakMinutes: 60, breakStart: '12:00' };
@@ -226,6 +226,59 @@ describe('bills paid from a paycheck', () => {
     const [a, b] = upcomingPaychecks(fridays, [split], jobs, '2026-10-30', 2, false, half).map((c) => c.bills[0]);
     expect(a).toMatchObject({ pay: '2026-10-30', paid: 30, done: true });
     expect(b).toMatchObject({ pay: '2026-11-13', paid: 0, done: false });
+  });
+});
+
+describe('bills you marked paid', () => {
+  const fridays: ScheduledJob = { ...dayJob, id: 'fridays', payday: '2026-10-16', payLagDays: 0 };
+  const jobs = [fridays];
+  const rent = bill({ id: 'rent', name: 'Rent', amount: 1000, dueDate: '2026-11-01', startDate: '2026-10-03', payFrom: 'end' });
+  const power = bill({ id: 'power', name: 'Power', amount: 150, dueDate: '2026-10-15', startDate: '2026-09-15', payFrom: 'mid' });
+
+  it('leaves out payments from before you started tracking', () => {
+    const log = paidLog(
+      [
+        { billId: 'power', date: '2026-09-29', amount: 140 },
+        { billId: 'power', date: '2026-10-14', amount: 150 },
+      ],
+      '2026-10-20',
+      '2026-10-04',
+    );
+    expect(log.byBill.get('power')).toEqual([{ date: '2026-10-14', amount: 150 }]);
+  });
+
+  it('counts a payment toward the due date you said it was for', () => {
+    // Paid a few days after October's was due, but it's for November's.
+    const early = paidLog([{ billId: 'power', date: '2026-10-19', amount: 150, billDue: '2026-11-15' }], '2026-10-20');
+    expect(upcomingPaychecks(fridays, [power], jobs, '2026-11-01', 1, false, early)[0].bills[0]).toMatchObject({ pay: '2026-11-13', dues: ['2026-11-15'], paid: 150, done: true });
+    // Without saying, it goes to October's.
+    const plain = paidLog([{ billId: 'power', date: '2026-10-19', amount: 150 }], '2026-10-20');
+    expect(upcomingPaychecks(fridays, [power], jobs, '2026-11-01', 1, false, plain)[0].bills[0]).toMatchObject({ paid: 0, done: false });
+  });
+
+  it('takes the rest of a bill from the next paycheck when you say so', () => {
+    const part = { billId: 'rent', date: '2026-10-30', amount: 400, billPart: true, restNext: true, billDue: '2026-11-01' };
+    const [now, next] = upcomingPaychecks(fridays, [rent], jobs, '2026-10-30', 2, false, paidLog([part], '2026-10-31'));
+    expect(now.bills[0]).toMatchObject({ pay: '2026-10-30', amount: 1000, paid: 400, done: false, restNext: true });
+    // This paycheck pays only what you paid; the rest comes out of the next one.
+    expect(lineTotal(now.bills[0])).toBe(400);
+    expect(now.billTotal).toBe(400);
+    expect(next.bills.map((b) => [b.bill.id, b.amount, !!b.carried])).toEqual([['rent', 600, true]]);
+    expect(next.billTotal).toBe(600);
+    // However long that takes, it waits for the rest.
+    const later = upcomingPaychecks(fridays, [rent], jobs, '2026-11-13', 1, false, paidLog([part], '2026-11-20'))[0];
+    expect(later.bills.find((b) => b.carried)).toMatchObject({ amount: 600 });
+  });
+
+  it('puts the next payment toward the rest first', () => {
+    const part = { billId: 'rent', date: '2026-10-30', amount: 400, billPart: true, restNext: true };
+    // The bank's payment of the rest, a little short, with nothing saying which one it's for.
+    const rest = paidLog([part, { billId: 'rent', date: '2026-11-13', amount: 590 }], '2026-11-14');
+    const [now, next, after] = upcomingPaychecks(fridays, [rent], jobs, '2026-10-30', 3, false, rest);
+    expect(now.bills[0]).toMatchObject({ amount: 990, paid: 990, done: true });
+    expect(next.bills).toEqual([]);
+    // December's rent is still to pay in full.
+    expect(after.bills[0]).toMatchObject({ pay: '2026-11-27', amount: 1000, paid: 0, done: false });
   });
 });
 

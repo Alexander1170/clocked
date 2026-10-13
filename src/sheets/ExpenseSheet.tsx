@@ -75,7 +75,7 @@ export function ExpenseSheet({ id, date }: { id?: string; date?: LocalDate }) {
 
   // A purchase you added by hand that this is the bank's copy of, or the other way around.
   const dup = useMemo(
-    () => (existing ? findDuplicates(txs, cover.trackFrom).find((d) => d.bank.id === existing.id || d.manual.id === existing.id) : undefined),
+    () => (existing ? findDuplicates(txs, cover.trackFrom, cover.bills).find((d) => d.bank.id === existing.id || d.manual.id === existing.id) : undefined),
     [existing, txs, cover.trackFrom],
   );
 

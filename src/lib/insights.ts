@@ -1,5 +1,5 @@
 // The numbers behind the Insights screen. Plain math, so it's easy to test.
-import type { Bill, BillFrequency, Category, GigSession, Job, LocalDate, Saving, ScheduledJob } from '../../shared/types.ts';
+import type { Bill, BillFrequency, Category, GigSession, Job, LocalDate, Saving, ScheduledJob, Transaction } from '../../shared/types.ts';
 import type { SetAsidePlan } from '../../shared/plan.ts';
 import { CHECKS_PER_YEAR } from '../../shared/pay.ts';
 import { addDays, dayStart, diffDays } from '../../shared/dates.ts';
@@ -130,6 +130,37 @@ export function untilPaydayFromBalance(o: { balance: number; unpaid: number; sav
   const free = o.balance - o.unpaid - o.saving;
   const daysLeft = Math.max(1, diffDays(o.today, o.nextPayday));
   return { free, daysLeft, perDay: free / daysLeft, start: o.balance, carry: 0 };
+}
+
+/** How long a bill you marked paid waits for the bank's copy before it's taken as already in the balance. */
+export const MARKED_DAYS = 5;
+
+/**
+ * What the bank balance doesn't show yet. On payday the deposit can come in hours (or a bank holiday)
+ * late, so until the bank shows it, the check counts. And bills you marked paid that the bank hasn't
+ * sent yet are on their way out.
+ */
+export function notInBankYet(
+  txs: readonly Transaction[],
+  o: { check: number; lastPayday: LocalDate; today: LocalDate; billName: (id: string) => string | undefined },
+): { paycheck: number; marked: Array<{ name: string; amount: number; date: LocalDate }>; depositedOn: LocalDate | null } {
+  // Some payroll deposits come in as transfers, and some land a few days early.
+  const deposit = txs.find(
+    (t) =>
+      t.source === 'plaid' && !t.deleted && !t.accountOff && t.amount < 0 && !t.gigPayout && -t.amount >= o.check * 0.5 && t.date >= addDays(o.lastPayday, -4) && t.date <= o.today,
+  );
+  const marked = txs
+    .filter((t) => t.source !== 'plaid' && !t.deleted && !!t.billId && t.amount > 0 && t.date >= addDays(o.today, -MARKED_DAYS) && t.date <= o.today)
+    .map((t) => ({ name: t.merchant.trim() || o.billName(t.billId!) || 'Bill', amount: t.amount, date: t.date }));
+  return { paycheck: deposit || !(o.check > 0) ? 0 : o.check, marked, depositedOn: deposit?.date ?? null };
+}
+
+/**
+ * What the counted accounts held before a day: today's balance with everything from that day on
+ * taken back out. Hidden ones too; they're still money in and out.
+ */
+export function balanceBefore(txs: readonly Transaction[], balance: number, day: LocalDate): number {
+  return txs.reduce((b, t) => (t.source === 'plaid' && !t.deleted && !t.accountOff && t.date >= day ? b + t.amount : b), balance);
 }
 
 export interface StretchTotals {

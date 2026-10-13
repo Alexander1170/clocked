@@ -113,6 +113,10 @@ export interface Transaction extends BaseRecord {
   billId?: string;
   /** Pays only part of the bill; the rest comes in another payment. */
   billPart?: boolean;
+  /** With billPart: the rest comes from your next paycheck, not this one. */
+  restNext?: boolean;
+  /** The due date of the bill this pays, when you said which one (it might come late or early). */
+  billDue?: LocalDate;
   /** A purchase from the wish list. Covered by the goal's daily set-aside. */
   goalId?: string;
   /** The user changed this bank transaction, so later bank updates keep their category, note, and flags. */

@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import type { Store } from './db.ts';
 import { plaidClient, PlaidError, type PlaidAccount, type PlaidClient, type PlaidEnv, type PlaidTransaction } from './plaid.ts';
 import { cleanName, findManualMatch, mapPlaidTransaction } from './categorize.ts';
-import { billForPayment, paysBill } from '../shared/bills.ts';
+import { billForPayment, namesBill, paysBill } from '../shared/bills.ts';
 import { bankNameOf, ruleFor, withRule } from '../shared/rules.ts';
 import { matchGigPayouts } from '../shared/payouts.ts';
 import { flowForDetailed } from '../shared/plaidCategories.ts';
@@ -258,6 +258,10 @@ export function createBank(store: Store, opts: { baseUrls?: Partial<Record<Plaid
             ? findManualMatch(
                 { amount: t.amount, date: t.authorized_date || t.date, merchant: bankName, alias: ruleFor(rules, bankName, t.name)?.rename },
                 handEntered.filter((x) => !matched.has(x.id)),
+                (c) => {
+                  const b = bills.find((x) => x.id === c.billId && !x.deleted);
+                  return !!b && (namesBill(b, bankName, t.name) || ruleFor(rules, bankName, t.name)?.billId === b.id);
+                },
               )
             : undefined;
         if (replaces) {
